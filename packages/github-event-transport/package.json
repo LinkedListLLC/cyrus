@@ -1,6 +1,6 @@
 {
 	"name": "cyrus-github-event-transport",
-	"version": "0.2.55",
+	"version": "0.2.56",
 	"description": "GitHub event transport for receiving and verifying forwarded GitHub webhooks",
 	"type": "module",
 	"main": "dist/index.js",

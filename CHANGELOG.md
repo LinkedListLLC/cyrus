@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.56] - 2026-05-22
+
 ### Fixed
 - **`slackAllowedTools`, `githubAllowedTools`, `linearAllowedTools`, and the `*McpConfigs` arrays from `~/.cyrus/config.json` are now applied at cold start.** Previously these fields were only picked up after a post-start config-file change, so the very first session after restart silently fell back to the built-in defaults. ([CYPACK-1236](https://linear.app/ceedar/issue/CYPACK-1236), [#1245](https://github.com/cyrusagents/cyrus/pull/1245))
 
@@ -12,6 +14,53 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 - **Claude-in-Chrome browser integration is no longer enabled for agent sessions.** Cyrus previously passed `--chrome` to every Claude runner session, which registered the `mcp__claude-in-chrome__*` MCP tools. In cloud-runtime sessions there is no path from the worker to the user's local Chrome extension, so those tools always failed with "Browser extension is not connected" — leading agents to loop on a misdiagnosis instead of falling back. The flag and the associated screenshot/GIF upload-guidance hooks have been removed. ([PRO-9](https://linear.app/ceedar/issue/PRO-9/failed-chrome-extension-not-connecting-oswaldo-okeefe), [#1244](https://github.com/cyrusagents/cyrus/pull/1244))
+
+### Packages
+
+#### cyrus-cloudflare-tunnel-client
+- cyrus-cloudflare-tunnel-client@0.2.56
+
+#### cyrus-mcp-tools
+- cyrus-mcp-tools@0.2.56
+
+#### cyrus-claude-runner
+- cyrus-claude-runner@0.2.56
+
+#### cyrus-core
+- cyrus-core@0.2.56
+
+#### cyrus-simple-agent-runner
+- cyrus-simple-agent-runner@0.2.56
+
+#### cyrus-codex-runner
+- cyrus-codex-runner@0.2.56
+
+#### cyrus-cursor-runner
+- cyrus-cursor-runner@0.2.56
+
+#### cyrus-config-updater
+- cyrus-config-updater@0.2.56
+
+#### cyrus-linear-event-transport
+- cyrus-linear-event-transport@0.2.56
+
+#### cyrus-github-event-transport
+- cyrus-github-event-transport@0.2.56
+
+#### cyrus-gitlab-event-transport
+- cyrus-gitlab-event-transport@0.2.56
+
+#### cyrus-slack-event-transport
+- cyrus-slack-event-transport@0.2.56
+
+#### cyrus-gemini-runner
+- cyrus-gemini-runner@0.2.56
+
+#### cyrus-edge-worker
+- cyrus-edge-worker@0.2.56
+
+#### cyrus-ai (CLI)
+- cyrus-ai@0.2.56
 
 ## [0.2.55] - 2026-05-22
 
