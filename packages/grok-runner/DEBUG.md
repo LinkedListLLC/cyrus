@@ -1,5 +1,8 @@
 # Debugging Grok + Cyrus (fork trial)
 
+> **Full install + Ubuntu + logging guide for this fork:** see repo-root
+> [`FORK_DEVELOPMENT.md`](../../FORK_DEVELOPMENT.md) (delete that file before upstream PR).
+
 ## What gets logged
 
 ### Console (all of Cyrus)
