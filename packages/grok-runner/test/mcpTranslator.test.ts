@@ -20,7 +20,7 @@ describe("toAcpNameValueList", () => {
 });
 
 describe("translateMcpConfigToAcp", () => {
-	it("encodes HTTP headers as name/value arrays", () => {
+	it("encodes HTTP headers as name/value arrays when http capability is true", () => {
 		const servers = translateMcpConfigToAcp({
 			mcpConfig: {
 				linear: {
@@ -81,6 +81,34 @@ describe("translateMcpConfigToAcp", () => {
 			mcpCapabilities: { http: false },
 		});
 		expect(servers).toHaveLength(0);
+	});
+
+	it("skips HTTP when mcpCapabilities is undefined (ACP: not present = unsupported)", () => {
+		const servers = translateMcpConfigToAcp({
+			mcpConfig: {
+				linear: {
+					type: "http",
+					url: "https://mcp.linear.app/mcp",
+					headers: {},
+				} as any,
+			},
+		});
+		expect(servers).toHaveLength(0);
+	});
+
+	it("includes HTTP only when mcpCapabilities.http is true", () => {
+		const servers = translateMcpConfigToAcp({
+			mcpConfig: {
+				linear: {
+					type: "http",
+					url: "https://mcp.linear.app/mcp",
+					headers: { Authorization: "Bearer x" },
+				} as any,
+			},
+			mcpCapabilities: { http: true },
+		});
+		expect(servers).toHaveLength(1);
+		expect(servers[0]?.name).toBe("linear");
 	});
 
 	it("skips in-process SDK servers", () => {

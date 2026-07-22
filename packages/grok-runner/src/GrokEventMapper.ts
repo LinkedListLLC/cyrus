@@ -241,7 +241,10 @@ function extractToolResultText(update: AcpSessionUpdate): {
 	isError: boolean;
 } {
 	const status = (update.status || "").toString().toLowerCase();
-	const isError = status === "error" || status === "failed";
+	// Mirror Codex/Cursor: non-success terminal statuses are errors for the timeline.
+	// ACP often uses failed; cancelled is turn-abort (Cursor maps CANCELLED similarly).
+	const isCancelled = status === "cancelled" || status === "canceled";
+	const isError = status === "error" || status === "failed" || isCancelled;
 
 	if (Array.isArray(update.content)) {
 		const parts: string[] = [];
@@ -284,7 +287,11 @@ function extractToolResultText(update: AcpSessionUpdate): {
 	}
 
 	return {
-		text: isError ? "Tool failed" : "Tool completed",
+		text: isCancelled
+			? "Tool cancelled"
+			: isError
+				? "Tool failed"
+				: "Tool completed",
 		isError,
 	};
 }
