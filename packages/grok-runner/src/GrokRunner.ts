@@ -218,7 +218,15 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		return args;
 	}
 
-	private buildChildEnv(stripApiKey: boolean): NodeJS.ProcessEnv {
+	/**
+	 * Child env for the Grok process.
+	 * Same pattern as Gemini/Codex: inherit process.env (keys stay available).
+	 * Auth method is chosen explicitly via ACP `authenticate` — we prefer
+	 * `cached_token` when auth.json exists; leaving XAI_API_KEY in the env is
+	 * required so an authenticate fallback to `xai.api_key` can actually work
+	 * on the already-spawned child (other runners do not strip API keys either).
+	 */
+	private buildChildEnv(): NodeJS.ProcessEnv {
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
 			GROK_DISABLE_AUTOUPDATER: "1",
@@ -226,22 +234,15 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		const grokHome =
 			this.config.grokHome || process.env.GROK_HOME || join(homedir(), ".grok");
 		env.GROK_HOME = grokHome;
-
-		if (stripApiKey) {
-			delete env.XAI_API_KEY;
-		}
 		return env;
 	}
 
 	private async runSession(prompt: string, workspace: string): Promise<void> {
 		const binary = resolveGrokBinary(this.config.grokPath);
 		const args = this.buildAgentArgs();
-		const useSubscription = hasGrokCachedAuth(this.config.grokHome);
-		const env = this.buildChildEnv(useSubscription);
+		const env = this.buildChildEnv();
 
-		this.logger.debug(
-			`Spawning ACP: ${binary} ${args.join(" ")} (stripApiKey=${useSubscription})`,
-		);
+		this.logger.debug(`Spawning ACP: ${binary} ${args.join(" ")}`);
 
 		const client = new AcpClient({
 			command: binary,

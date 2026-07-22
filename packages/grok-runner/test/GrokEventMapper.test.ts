@@ -38,6 +38,36 @@ describe("projectGrokToolName", () => {
 });
 
 describe("GrokEventMapper", () => {
+	it("marks cancelled tools as errors with Tool cancelled text", () => {
+		const messages: import("cyrus-core").SDKMessage[] = [];
+		const mapper = new GrokEventMapper({
+			workingDirectory: "/tmp",
+			getSessionId: () => "s1",
+			emitMessage: (m) => messages.push(m),
+			onSessionId: () => {},
+		});
+		mapper.emitInit("s1");
+		mapper.handleUpdate({
+			sessionUpdate: "tool_call",
+			toolCallId: "c-cancel",
+			_meta: { "x.ai/tool": { name: "read_file" } },
+			rawInput: { target_file: "x" },
+		});
+		mapper.handleUpdate({
+			sessionUpdate: "tool_call_update",
+			toolCallId: "c-cancel",
+			status: "cancelled",
+		});
+		const result = messages.find(
+			(m) =>
+				m.type === "user" &&
+				Array.isArray((m as any).message?.content) &&
+				(m as any).message.content[0]?.type === "tool_result",
+		) as any;
+		expect(result?.message.content[0].is_error).toBe(true);
+		expect(result?.message.content[0].content).toBe("Tool cancelled");
+	});
+
 	it("emits init, tool_use, tool_result, assistant text, and result", () => {
 		const { mapper, messages, getSessionId } = collectMapper();
 

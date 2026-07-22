@@ -155,6 +155,8 @@ export class AcpClient {
 
 	/**
 	 * Send a JSON-RPC response to an agent-initiated request.
+	 * Write errors are logged (same class of issue as request() write failures);
+	 * process exit / failAll covers the usual dead-child case.
 	 */
 	respond(id: JsonRpcId, result: unknown): void {
 		if (!this.proc?.stdin || this.closed) return;
@@ -163,7 +165,13 @@ export class AcpClient {
 			id,
 			result,
 		})}\n`;
-		this.proc.stdin.write(payload);
+		this.proc.stdin.write(payload, (err) => {
+			if (err) {
+				console.warn(
+					`[AcpClient] Failed to write response for id=${id}: ${err.message}`,
+				);
+			}
+		});
 	}
 
 	respondError(
@@ -178,7 +186,13 @@ export class AcpClient {
 			id,
 			error: { code, message, ...(data !== undefined ? { data } : {}) },
 		})}\n`;
-		this.proc.stdin.write(payload);
+		this.proc.stdin.write(payload, (err) => {
+			if (err) {
+				console.warn(
+					`[AcpClient] Failed to write error response for id=${id}: ${err.message}`,
+				);
+			}
+		});
 	}
 
 	kill(signal: NodeJS.Signals = "SIGTERM"): void {

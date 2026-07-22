@@ -187,10 +187,9 @@ export class RunnerSelectionService {
 			) {
 				return "claude";
 			}
-			if (normalizedModel.startsWith("grok") || normalizedModel === "default") {
-				// "default" alone is ambiguous — only treat as grok when agent is already grok
-				if (normalizedModel.startsWith("grok")) return "grok";
-			}
+			// Model "default" is the Grok omit--m sentinel and is intentionally
+			// not mapped here (ambiguous). Runner comes from labels/tags/defaultRunner.
+			if (normalizedModel.startsWith("grok")) return "grok";
 			if (isCodexModel(normalizedModel)) return "codex";
 			return undefined;
 		};

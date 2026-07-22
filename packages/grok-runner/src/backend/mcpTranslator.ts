@@ -116,8 +116,10 @@ export function translateMcpConfigToAcp(
 		...(opts.mcpConfig || {}),
 	};
 
-	const httpSupported = opts.mcpCapabilities?.http !== false;
-	const sseSupported = Boolean(opts.mcpCapabilities?.sse);
+	// ACP: HTTP/SSE only when the agent advertises them (false or absent = unsupported).
+	// Stdio is always allowed. Match both transports with the same opt-in rule.
+	const httpSupported = opts.mcpCapabilities?.http === true;
+	const sseSupported = opts.mcpCapabilities?.sse === true;
 
 	const servers: AcpMcpServer[] = [];
 
