@@ -157,15 +157,69 @@ jq '.repositories |= map(
 no redeploy needed. Because `routingLabels` outrank `teamKeys`, you can also keep
 a repo label-routed (tag the issue) as a manual override for a specific repo.
 
-## Customizing behavior & skills
+## Customizing agent behavior
 
-- **Tools:** per-repo `allowedTools` in `config.json` (`readOnly` / `safe` / `all`
-  or a custom array). See `docs/CONFIG_FILE.md`.
-- **Modes:** `labelPrompts` routes Linear labels → `debugger` / `builder` / `scoper`.
-- **Skills:** drop skill folders in `/root/.cyrus/` (instance-level) or a repo's
-  `.claude/skills/` (per-repo); they can be scoped by repo/team/label.
-- To run a **second agent** (e.g. a read-only reviewer), create a second OAuth app
-  + a second Dokploy Application with its own volume and `allowedTools: readOnly`.
+Everything below is per-repo in `config.json` (hot-reloaded — no redeploy),
+except the file/skill edits. Ranked easiest → most powerful:
+
+1. **`appendInstruction`** (string) — free-text guidance appended to every session
+   for that repo, wrapped in `<repository-specific-instruction>`. The quickest way
+   to add house rules or a persona nudge without touching prompt files.
+   ```json
+   "appendInstruction": "Use conventional commits. Run `pnpm test` before opening a PR. Prefer small, reviewable diffs."
+   ```
+2. **`CLAUDE.md`** in the target repo — Claude Code reads it natively.
+3. **`labelPrompts`** — map Linear **labels → a mode**, each with its own persona
+   prompt + tool policy. Modes (0.2.66): `builder` (implement), `debugger` (fix),
+   `scoper` (analysis/spec), `orchestrator` (decompose + coordinate sub-agents),
+   `graphite` / `graphite-orchestrator` (stacked PRs). **Not deprecated — actively
+   used.** Matching is case-insensitive on label names.
+   ```json
+   "labelPrompts": {
+     "builder":  { "labels": ["Feature","Improvement"], "allowedTools": "safe" },
+     "debugger": { "labels": ["Bug"], "allowedTools": "readOnly" },
+     "scoper":   { "labels": ["PRD","Spec"] }
+   }
+   ```
+4. **Skills** — reusable, runtime-discoverable procedures (v0.2.41+ replaced the old
+   hardcoded procedure sequences; they did **not** replace `labelPrompts`). Two homes:
+   - **`<repo>/.claude/skills/*`** — auto-discovered whenever Cyrus works in that repo
+     and **always loaded** (no per-label filtering; presence in the repo is the scope).
+   - **`~/.cyrus/skills/*`** (instance-wide) — supports a **`scope.json`** sidecar
+     (`repositoryIds` / `linearTeamIds` / `linearLabelIds` — note: label **IDs**, not
+     names) to load a skill only for matching sessions.
+5. **`promptTemplatePath`** (string) — replace the default prompt scaffold for the repo.
+6. **Fork superpower (build-from-source):** edit the mode prompts directly —
+   `packages/edge-worker/prompts/{builder,debugger,scoper,orchestrator}.md`
+   (versioned with `<version-tag>`).
+7. **Capabilities:** `allowedTools` / `disallowedTools` (per repo), `promptDefaults`
+   (global per-mode tools), `model` / `fallbackModel` (or Linear model labels like
+   `opus`, `fable`, `sonnet`, `gpt-5.5`, `*-codex`), `mcpConfigPath` (add MCP tools).
+
+To run a **second agent** (e.g. a read-only reviewer): second OAuth app + second
+Dokploy Application with its own volume, `allowedTools: readOnly`, and an
+`appendInstruction` describing the review job.
+
+### Example: routing a planning workflow by label
+
+If your issues use a labelled planning workflow (e.g. wayfinder's `wayfinder:*`
+labels), map each label to a persona + tool policy with `labelPrompts` and steer
+the behavior with `appendInstruction`. AFK ticket types (research/task) run fully
+autonomously; HITL types (grilling/prototype) work via async Q&A in the Linear
+thread (Cyrus asks, you reply, it continues) — give those `readOnly` so they can't
+drift into implementing:
+
+```json
+"labelPrompts": {
+  "scoper":       { "labels": ["wayfinder:research", "wayfinder:grilling"], "allowedTools": "readOnly" },
+  "builder":      { "labels": ["wayfinder:task", "wayfinder:prototype"], "allowedTools": "safe" },
+  "orchestrator": { "labels": ["wayfinder:map"] }
+},
+"appendInstruction": "If this issue has a `wayfinder:<type>` label, follow the matching skill: research → read + post findings (don't implement); task → do the unblocking work and record resulting facts; prototype → build a cheap throwaway, link it, ask for reaction; grilling → HITL, ask ONE question at a time in the thread and WAIT (never answer your own questions). Prefer decisions over deliverables."
+```
+
+The skills these reference (`research`, `prototype`, `grilling`, …) are picked up
+automatically from the repo's committed `.claude/skills/` — no install needed.
 
 ## Local build check
 
