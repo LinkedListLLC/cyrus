@@ -1,0 +1,9 @@
+# Keep the build context lean and force a clean install/build in the image.
+**/node_modules
+**/dist
+.git
+*.log
+.DS_Store
+.cyrus
+# Do NOT ignore any workspace dir (apps/*, packages/*) — pnpm --frozen-lockfile
+# needs every workspace member present to satisfy the lockfile.
