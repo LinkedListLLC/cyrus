@@ -76,7 +76,18 @@ you hit org-visibility issues.
    ANTHROPIC_API_KEY=<anthropic key>      # or CLAUDE_CODE_OAUTH_TOKEN
    GH_TOKEN=<github fine-grained PAT>
    # CYRUS_SERVER_PORT defaults to 3456 (already set in the image)
+   # WEBHOOK_IP_VALIDATION defaults to false in the image — see note below
    ```
+
+   > **Webhook IP validation.** `CYRUS_HOST_EXTERNAL=true` (needed so the server
+   > binds `0.0.0.0` for Traefik) makes Cyrus auto-enable a source-IP allowlist
+   > that only trusts Linear's GCP webhook IPs. Behind Traefik/Cloudflare the
+   > source IP is the proxy's edge, so every webhook is rejected
+   > (`Rejected Linear webhook from unauthorized IP …`). The image therefore
+   > ships `WEBHOOK_IP_VALIDATION=false`; the `LINEAR_WEBHOOK_SECRET` HMAC
+   > signature still authenticates every webhook. Only set it back to `true` if
+   > you expose the container directly with no proxy (and, if using Cloudflare,
+   > set the DNS record to "DNS only" so Linear's real IP reaches Cyrus).
 4. **Mounts → add Volume Mount:** Volume Name `cyrus-data`, Mount Path `/root/.cyrus`.
 5. **Domains → add:** Host `cyrus.<your-domain>`, Container Port `3456`, HTTPS on,
    Certificate `letsencrypt`. (No host port mapping needed — Traefik reaches the

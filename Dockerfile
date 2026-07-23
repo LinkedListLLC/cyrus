@@ -38,6 +38,15 @@ RUN pnpm install --frozen-lockfile \
 # CYRUS_HOST_EXTERNAL=true → bind 0.0.0.0 so Traefik can reach the container.
 ENV CYRUS_SERVER_PORT=3456
 ENV CYRUS_HOST_EXTERNAL=true
+
+# Behind a reverse proxy (Traefik/Cloudflare on Dokploy) the source IP Cyrus
+# sees is the proxy's edge, not Linear's GCP webhook IP — so the built-in
+# source-IP allowlist (which CYRUS_HOST_EXTERNAL auto-enables) rejects every
+# webhook. The LINEAR_WEBHOOK_SECRET HMAC signature is the real authentication,
+# so disable the IP allowlist here. Set to "true" only if the container is
+# exposed directly to the internet with no proxy in front.
+ENV WEBHOOK_IP_VALIDATION=false
+
 EXPOSE 3456
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
