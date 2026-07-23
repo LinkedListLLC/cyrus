@@ -30,8 +30,36 @@ on port **3456**.
    - Enable webhooks + the agent/assignable scopes.
    - Capture `Client ID`, `Client Secret`, and the `Webhook signing secret`.
 3. **Anthropic** — an `ANTHROPIC_API_KEY` (or a `CLAUDE_CODE_OAUTH_TOKEN`).
-4. **GitHub PAT** — a fine-grained token with *Contents: Read/Write* on the repos
-   Cyrus will work in (for cloning + pushing PR branches).
+4. **GitHub PAT** — a token for cloning repos, pushing branches, and opening PRs
+   (goes in the `GH_TOKEN` env var). Exact permissions below.
+
+### GitHub token permissions (`GH_TOKEN`)
+
+Cyrus does three things on GitHub: **clone the repo, push the per-issue branch,
+and open a PR.** The token is used both by git (URL rewrite in the entrypoint)
+and the `gh` CLI (exported as `GITHUB_TOKEN`), so one token covers both.
+
+**Fine-grained PAT (recommended):**
+- **Resource owner:** the org that owns the repos (e.g. `LinkedListLLC`), *not*
+  your personal account. If the org requires approval for fine-grained PATs,
+  approve the request.
+- **Repository access:** select the specific repos Cyrus will work in (or "All
+  repositories" under the org).
+- **Repository permissions:**
+
+  | Permission | Level | Why |
+  |---|---|---|
+  | **Contents** | Read and write | Clone + push the branch |
+  | **Pull requests** | Read and write | `gh pr create` + update PRs |
+  | **Metadata** | Read | Mandatory baseline (auto-selected) |
+  | **Workflows** | Read and write *(optional)* | Only if agents may edit `.github/workflows/**` — without it, any push touching a CI file is rejected |
+  | **Issues** | Read and write *(optional)* | Only if you wire GitHub Issues as a trigger source or want it commenting on GH issues |
+
+  The first three are the required core; add **Workflows** if coding tasks might touch CI config.
+
+**Classic PAT (simpler, broader):** scope `repo` (full private-repo control)
+covers clone/push/PR; add `workflow` if touching workflow files, `read:org` if
+you hit org-visibility issues.
 
 ## Create the Dokploy Application
 
