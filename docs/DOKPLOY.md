@@ -127,6 +127,36 @@ volume across redeploys.
   run a Claude Code session, comment progress, and open a PR.
 - Redeploy once and confirm the added repo/token survive (proves the volume works).
 
+## Routing issues to the right repo (avoid the "which repo?" prompt)
+
+When more than one repo is configured, Cyrus matches each assigned issue to a
+repo using `config.json` routing keys, in strict priority (falling through if
+none match):
+
+1. description tag in the issue body →
+2. **`routingLabels`** — Linear label names (exact) →
+3. **`projectKeys`** — Linear project names →
+4. **`teamKeys`** — Linear team keys (exact, case-sensitive; e.g. `JOB` for `JOB-165`) →
+5. issue-identifier prefix (also matched against `teamKeys`) →
+6. a single **catch-all** repo (one with *no* teamKeys/routingLabels/projectKeys) →
+7. otherwise Cyrus **asks** you to pick.
+
+`cyrus self-add-repo` defaults each repo's `routingLabels` to its repo name, so
+if your issues don't carry a label of that name, nothing matches and you get the
+prompt. The fix is to add **`teamKeys`** so issues route by their team:
+
+```bash
+cd /root/.cyrus && cp config.json config.json.bak && \
+jq '.repositories |= map(
+      if   .name == "job-boards" then . + {teamKeys: ["JOB"]}
+      elif .name == "SalonPrive" then . + {teamKeys: ["SP"]}
+      else . end)' config.json.bak > config.json
+```
+
+`config.json` is hot-reloaded (watch for `🔄 Config file changed, reloading…`);
+no redeploy needed. Because `routingLabels` outrank `teamKeys`, you can also keep
+a repo label-routed (tag the issue) as a manual override for a specific repo.
+
 ## Customizing behavior & skills
 
 - **Tools:** per-repo `allowedTools` in `config.json` (`readOnly` / `safe` / `all`
