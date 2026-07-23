@@ -11,6 +11,16 @@ if [ -n "${GH_TOKEN:-}" ]; then
   export GITHUB_TOKEN="${GH_TOKEN}"
 fi
 
+# Seed a minimal config.json if none exists yet. `cyrus self-auth-linear` and
+# `cyrus self-add-repo` both require the file to already exist, but bare `cyrus`
+# does not create it — only the sub-directories. This makes first-run setup work
+# without a manual step. The guard never clobbers an existing (authed) config.
+mkdir -p /root/.cyrus
+if [ ! -f /root/.cyrus/config.json ]; then
+  echo '{"repositories": []}' > /root/.cyrus/config.json
+  echo ">> Seeded an empty /root/.cyrus/config.json (run cyrus self-auth-linear / self-add-repo next)."
+fi
+
 # First-run helper. Set CYRUS_SETUP_IDLE=true to keep the container up WITHOUT
 # starting the server, so the one-time `cyrus self-auth-linear` OAuth flow can
 # bind :3456 for its callback. Run the setup commands in the Dokploy terminal,

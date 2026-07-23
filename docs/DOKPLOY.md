@@ -94,6 +94,9 @@ volume across redeploys.
    **not** start the server (so the OAuth callback server can bind `:3456`).
 2. Open the Application's **Terminal** in Dokploy and run:
    ```bash
+   # The entrypoint auto-seeds /root/.cyrus/config.json. If you're on an older
+   # image and `self-auth-linear` says "Config file not found", create it once:
+   #   mkdir -p /root/.cyrus && echo '{"repositories": []}' > /root/.cyrus/config.json
    cyrus self-auth-linear
    # → prints an authorization URL. Open it in your browser, approve.
    #   Linear redirects to https://cyrus.<your-domain>/callback and the token is
