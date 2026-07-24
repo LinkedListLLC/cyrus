@@ -29,7 +29,11 @@ import { translateMcpConfigToAcp } from "./backend/mcpTranslator.js";
 import { GrokMessageFormatter } from "./formatter.js";
 import { GrokEventMapper } from "./GrokEventMapper.js";
 import { hasGrokCachedAuth, resolveGrokBinary } from "./grokBinary.js";
-import { translateToolRules } from "./toolPolicy.js";
+import {
+	buildRejectionOutcome,
+	evaluatePermissionRequest,
+	translateToolRules,
+} from "./toolPolicy.js";
 import {
 	GROK_DEFAULT_MODEL_SENTINEL,
 	type GrokRunnerConfig,
@@ -249,12 +253,24 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		if (model) {
 			args.push("--model", model);
 		}
+		// `--always-approve` (bypassPermissions) is what keeps an unattended
+		// session from stalling on a prompt — but it is NOT safe to combine with
+		// deny rules, despite the docs saying denials still apply. Verified live
+		// on CYR-9: with `--deny Write` on the command line the agent wrote a file
+		// anyway, and the session's ACP wire log held 746 updates and **zero**
+		// `session/request_permission` calls. The flag short-circuits the rule
+		// engine before deny is consulted, so the agent never even asks.
+		//
+		// With a restriction in force we therefore drop it and let the agent ask;
+		// the client answers immediately from the policy (see `onAgentRequest` in
+		// runSession), so nothing blocks waiting for a human.
 		const alwaysApprove = this.config.alwaysApprove !== false;
-		if (alwaysApprove) {
-			// Unattended sessions must never block on a prompt. Safe to combine
-			// with the rules above: always-approve short-circuits the permission
-			// pipeline *after* deny rules, so denials are still enforced.
+		if (alwaysApprove && policy.deny.length === 0) {
 			args.push("--always-approve");
+		} else if (alwaysApprove) {
+			this.logger.info(
+				"Withholding --always-approve: it bypasses the deny rules for this session; permissions are enforced client-side instead.",
+			);
 		}
 		args.push("stdio");
 		return args;
@@ -283,6 +299,10 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		const binary = resolveGrokBinary(this.config.grokPath);
 		const args = this.buildAgentArgs();
 		const env = this.buildChildEnv();
+		const policy = translateToolRules(
+			this.config.allowedTools,
+			this.config.disallowedTools,
+		);
 
 		this.logger.debug(`Spawning ACP: ${binary} ${args.join(" ")}`);
 
@@ -292,6 +312,20 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			cwd: workspace,
 			env,
 			requestTimeoutMs: 30 * 60 * 1000,
+			// Enforce the tool policy where ACP actually puts the decision: here.
+			// Returning undefined falls through to the default auto-approve, which
+			// is what an unrestricted session should keep doing.
+			onAgentRequest: (method, params) => {
+				if (!method.endsWith("request_permission")) {
+					return undefined;
+				}
+				const verdict = evaluatePermissionRequest(params, policy);
+				if (verdict.allowed) {
+					return undefined;
+				}
+				this.logger.info(`Denied a tool permission request: ${verdict.reason}`);
+				return buildRejectionOutcome(params);
+			},
 			onNotification: (n) => this.handleNotification(n),
 			onStderr: (chunk) => {
 				const text = chunk.trim();
