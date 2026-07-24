@@ -217,6 +217,73 @@ export const GITHUB_DEFAULT_ALLOWED_TOOLS = [
 ] as const;
 
 /**
+ * Allowed tools for `reviewOnStatus` review sessions.
+ *
+ * A review session exists to *read* a diff and *say* what it thinks. It is
+ * read-only by construction: no `Edit`, no `Write`, no `NotebookEdit`, and no
+ * general `Bash`. The only shell commands granted are read-only git/gh
+ * inspection commands, because the bare read-only toolset has no `Bash` at all
+ * and a reviewer that cannot run `git diff` cannot review anything.
+ *
+ * `mcp__linear` is included deliberately — the review needs to read the issue
+ * and post its verdict back to Linear. That is the one write this session is
+ * allowed to make, and it writes to the issue tracker, never to code.
+ *
+ * Pair this with {@link REVIEW_DISALLOWED_TOOLS}: `disallowedTools` is an
+ * instant deny that takes precedence over any allow rule, so the write tools
+ * stay blocked even if a repository's own `allowedTools` is merged in.
+ */
+export const REVIEW_ALLOWED_TOOLS = [
+	// Read-only code access
+	"Read",
+	"Glob",
+	"Grep",
+
+	// Read-only diff inspection. `git`/`gh` subcommands are enumerated
+	// individually — `Bash(git:*)` would also permit `git push`/`git commit`.
+	"Bash(git diff:*)",
+	"Bash(git log:*)",
+	"Bash(git show:*)",
+	"Bash(git status:*)",
+	"Bash(git blame:*)",
+	"Bash(gh pr view:*)",
+	"Bash(gh pr diff:*)",
+
+	// Web
+	"WebFetch",
+	"WebSearch",
+
+	// Planning + discovery (task tools only mutate task tracking, not code)
+	"TaskCreate",
+	"TaskUpdate",
+	"TaskGet",
+	"TaskList",
+	"ToolSearch",
+
+	// Issue tracker — read the issue, post the review
+	"mcp__linear",
+] as const;
+
+/**
+ * Tools explicitly denied to `reviewOnStatus` review sessions.
+ *
+ * Belt and braces on top of {@link REVIEW_ALLOWED_TOOLS}: a deny rule wins
+ * over any allow rule, so this is what makes "the review can never change the
+ * code" a property of the configuration rather than of the prompt.
+ */
+export const REVIEW_DISALLOWED_TOOLS = [
+	"Edit",
+	"Write",
+	"NotebookEdit",
+	"Bash(git push:*)",
+	"Bash(git commit:*)",
+	"Bash(git checkout:*)",
+	"Bash(git reset:*)",
+	"Bash(gh pr merge:*)",
+	"Bash(gh pr create:*)",
+] as const;
+
+/**
  * Platform identifier used by callers that want to resolve a default list
  * dynamically. Keeps platform-string typos out of the call sites.
  */

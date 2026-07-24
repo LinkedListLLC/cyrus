@@ -50,3 +50,4 @@ CLAUDE.local.md
 
 # Per-task git worktrees for delegated agents (each holds its own node_modules).
 .claude/worktrees/
+.claude/handoffs/

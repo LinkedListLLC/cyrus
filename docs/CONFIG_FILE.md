@@ -70,6 +70,16 @@ Routes Linear issues with specific labels to this repository. This is useful whe
 
 Example: `["backend", "api"]` - Only process issues that have the "backend" or "api" label
 
+### `reviewOnStatus` (string)
+
+Name of the Linear workflow state that triggers an automatic, read-only code review. Matched against the state's name, case-insensitively.
+
+Example: `"In Review"` - When an issue routed to this repository moves to "In Review", Cyrus starts a **new** agent session that checks out the pull request head in a clean, throwaway worktree, reviews the diff, and posts a structured review (Blocking / Non-blocking / Nits plus a verdict) back to the issue.
+
+The review session is read-only by construction: it can read code and run read-only `git`/`gh` inspection commands, but it cannot edit files, commit, push, or merge. It never continues the session that wrote the code, so the review is independent rather than a self-review.
+
+Omit this field to disable automatic reviews for the repository (the default). See [REVIEW_ON_STATUS.md](REVIEW_ON_STATUS.md) for details.
+
 ---
 
 ## Routing Priority Order
