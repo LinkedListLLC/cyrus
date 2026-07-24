@@ -183,14 +183,31 @@ Two things make this more than a pass-through:
   in `.claude/settings.json` or a `PreToolUse` hook — neither of which Cyrus
   writes into your repository worktree.
 
-**⚠️ Verify once, after `grok login`.** The flags are documented as "always
-enforced" and are confirmed to parse (an invalid value is rejected by the CLI),
-but end-to-end enforcement has **not** been exercised against a live session —
-that needs an authenticated Grok. To check: assign an issue with a read-only
-label, then in the container logs look for the
-`Grok permission rules — deny: …` line, and confirm the session refuses to edit
-a file or run a shell command. Until that's done, treat a Grok session as
-**not** reliably tool-limited.
+**How it is enforced (and why not by the CLI).** Live testing on CYR-9 showed
+the `--deny` flags are accepted by the Grok CLI and then **ignored**: the
+process carried `--deny Write`, the agent wrote a file anyway, and that
+session's ACP wire log contained 746 updates and **zero**
+`session/request_permission` calls. `--always-approve` short-circuits the rule
+engine before deny is consulted, so the agent never asks — contrary to the
+CLI's own documentation.
+
+So Cyrus enforces the policy itself:
+
+- when a restriction is in force it **withholds `--always-approve`**, so the
+  agent asks rather than proceeding silently (unrestricted sessions keep it and
+  behave exactly as before), and
+- it answers each `session/request_permission` against the policy instead of
+  blanket-approving. The client decides immediately, so nothing stalls waiting
+  for a human.
+
+Classification reads Grok's own tool descriptor (`_meta["x.ai/tool"]`) and ACP's
+`toolCall.kind`/`title`, and **fails closed** — with a restriction in force, a
+request that cannot be classified is denied. If that ever over-blocks, it shows
+up loudly in the session transcript rather than silently letting a write through.
+
+**Re-verify after any Grok CLI upgrade**, since this depends on the CLI's
+permission behaviour: file an issue with a read-only label asking the agent to
+attempt a file write, and confirm it is refused.
 
 ### Sandbox (optional, stronger than rules)
 
