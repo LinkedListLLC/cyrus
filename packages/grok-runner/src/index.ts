@@ -7,6 +7,11 @@ export { GrokEventMapper, projectGrokToolName } from "./GrokEventMapper.js";
 export { GrokRunner } from "./GrokRunner.js";
 export { hasGrokCachedAuth, resolveGrokBinary } from "./grokBinary.js";
 export {
+	type GrokToolPolicy,
+	translateToolRule,
+	translateToolRules,
+} from "./toolPolicy.js";
+export {
 	GROK_DEFAULT_MODEL_SENTINEL,
 	type GrokRunnerConfig,
 	type GrokRunnerEvents,

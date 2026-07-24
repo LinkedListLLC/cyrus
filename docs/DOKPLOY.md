@@ -150,9 +150,69 @@ the same place (the CLI's own tooling is `$HOME/.grok`-centric, Cyrus reads
 - Auto-update is disabled (`GROK_DISABLE_AUTOUPDATER=1`): the binary lives in a
   read-only image layer, so upgrades happen by rebuilding the image.
 - The `grok` CLI adds ~130 MB to the image.
-- ⚠️ Cyrus's tool-restriction and skills layers (`allowedTools`, `labelPrompts`,
-  `~/.cyrus/skills`) are **Claude-first**. Don't assume a `readOnly` preset
-  constrains a Grok session until it's been checked.
+### Tool restrictions on Grok sessions
+
+Cyrus's `allowedTools` / `disallowedTools` (including the `readOnly` and `safe`
+presets and per-label `labelPrompts`) are now translated into **Grok permission
+rules** and passed to the CLI as `--allow` / `--deny` flags.
+
+Two things make this more than a pass-through:
+
+- **`mcp__server` grants are rewritten.** Grok tool names carry no `mcp__`
+  prefix, so a rule written `mcp__linear` matches nothing and is skipped with a
+  warning — a review persona would silently lose its ability to post back to
+  Linear. It becomes `MCPTool(linear__*)`.
+- **Restrictions are expressed as denies.** Only `deny` is honoured in every
+  permission mode; an allow-list alone would be inert under the
+  `--always-approve` that unattended sessions use. So when an allow-list is in
+  force, every mutating tool class missing from it (`Edit`, `Write`,
+  `NotebookEdit`, `Bash`) is denied explicitly. This mirrors Grok's own
+  documented read-only-reviewer example.
+
+**Known limits, by design:**
+
+- Tool names Grok doesn't recognize (`Task`, `Skill`, `TaskCreate`, …) have no
+  equivalent and are dropped. They're logged at startup as
+  *"Tool rules with no Grok equivalent (ignored): …"* rather than silently
+  discarded. Grok's built-in auto-approvals still cover read-only work
+  (`read_file`, `list_dir`, `grep`, `web_search`, invoking skills).
+- **A scoped Bash grant can't be enforced.** `Bash(git:*)` means "only git", but
+  Grok evaluates `deny` before `allow`, so a blanket `Bash` deny would kill the
+  permitted git commands too. In that case Bash is left **unrestricted** and the
+  session logs a warning saying so. Narrowing it needs `defaultMode: "dontAsk"`
+  in `.claude/settings.json` or a `PreToolUse` hook — neither of which Cyrus
+  writes into your repository worktree.
+
+**⚠️ Verify once, after `grok login`.** The flags are documented as "always
+enforced" and are confirmed to parse (an invalid value is rejected by the CLI),
+but end-to-end enforcement has **not** been exercised against a live session —
+that needs an authenticated Grok. To check: assign an issue with a read-only
+label, then in the container logs look for the
+`Grok permission rules — deny: …` line, and confirm the session refuses to edit
+a file or run a shell command. Until that's done, treat a Grok session as
+**not** reliably tool-limited.
+
+### Sandbox (optional, stronger than rules)
+
+Grok also has a kernel-enforced sandbox (Landlock on Linux) that Cyrus does not
+set. It's available via the CLI's own env var, so you can turn it on per
+deployment without a code change:
+
+```
+GROK_SANDBOX=read-only     # read everywhere; writes only to ~/.grok + temp
+```
+
+⚠️ The `read-only` and `strict` profiles **block child-process network access on
+Linux**, which will break stdio MCP servers that need the network (the Linear
+MCP among them). For a reviewer that still has to comment on Linear, prefer the
+permission rules above, or a custom profile in `sandbox.toml` with
+`restrict_network = false`.
+
+### Skills
+
+`~/.cyrus/skills` staging is Claude/Codex-only (`runnerSupportsManagedSkills`),
+so Cyrus does not install skills into a Grok session. Grok has its own skills
+system, so wiring the two together is possible but is not done yet.
 
 ## Verify
 

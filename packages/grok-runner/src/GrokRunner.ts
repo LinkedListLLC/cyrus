@@ -29,6 +29,7 @@ import { translateMcpConfigToAcp } from "./backend/mcpTranslator.js";
 import { GrokMessageFormatter } from "./formatter.js";
 import { GrokEventMapper } from "./GrokEventMapper.js";
 import { hasGrokCachedAuth, resolveGrokBinary } from "./grokBinary.js";
+import { translateToolRules } from "./toolPolicy.js";
 import {
 	GROK_DEFAULT_MODEL_SENTINEL,
 	type GrokRunnerConfig,
@@ -205,13 +206,54 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 	}
 
 	private buildAgentArgs(): string[] {
-		const args: string[] = ["agent"];
+		// Permission rules are *global* flags: they must precede the `agent`
+		// subcommand (verified against grok 0.2.111 — an invalid value there is
+		// rejected by the parser, so they are genuinely read in this position).
+		const args: string[] = [];
+		const policy = translateToolRules(
+			this.config.allowedTools,
+			this.config.disallowedTools,
+		);
+		for (const rule of policy.allow) {
+			args.push("--allow", rule);
+		}
+		for (const rule of policy.deny) {
+			args.push("--deny", rule);
+		}
+
+		if (policy.untranslated.length > 0) {
+			// Grok skips unknown tool names with a warning of its own, which is
+			// easy to miss in a container log. Say it plainly: these granted
+			// nothing, so anything relying on them is not actually permitted.
+			this.logger.info(
+				`Tool rules with no Grok equivalent (ignored): ${policy.untranslated.join(", ")}`,
+			);
+		}
+		if (policy.scopedBashUnenforceable) {
+			this.logger.info(
+				"Bash is scoped to specific commands in allowedTools, which Grok cannot enforce with rules alone (deny beats allow) — Bash is left UNRESTRICTED for this session.",
+			);
+		}
+		if (policy.deny.length > 0) {
+			// Info, not debug: this is the line that tells an operator what the
+			// session is actually forbidden from doing.
+			this.logger.info(
+				`Grok permission rules — deny: ${policy.deny.join(", ")}${
+					policy.allow.length > 0 ? ` | allow: ${policy.allow.join(", ")}` : ""
+				}`,
+			);
+		}
+
+		args.push("agent");
 		const model = this.resolvedModelId();
 		if (model) {
 			args.push("--model", model);
 		}
 		const alwaysApprove = this.config.alwaysApprove !== false;
 		if (alwaysApprove) {
+			// Unattended sessions must never block on a prompt. Safe to combine
+			// with the rules above: always-approve short-circuits the permission
+			// pipeline *after* deny rules, so denials are still enforced.
 			args.push("--always-approve");
 		}
 		args.push("stdio");
