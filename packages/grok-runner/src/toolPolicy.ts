@@ -242,6 +242,8 @@ export function describePermissionRequest(params: unknown): {
 	hints: string[];
 	explicitlyReadOnly: boolean;
 	mcpServer?: string;
+	/** The shell command, when this is a Bash-class call. */
+	command?: string;
 } {
 	const p = (params ?? {}) as Record<string, unknown>;
 	const toolCall = (p.toolCall ?? p.tool_call ?? p) as Record<string, unknown>;
@@ -269,11 +271,42 @@ export function describePermissionRequest(params: unknown): {
 		}
 	}
 
+	const rawInput = (toolCall.rawInput ?? toolCall.raw_input ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const commandValue =
+		rawInput.command ?? rawInput.cmd ?? rawInput.script ?? rawInput.input;
+
 	return {
 		hints,
 		explicitlyReadOnly: xai.read_only === true || toolCall.read_only === true,
 		mcpServer,
+		command: typeof commandValue === "string" ? commandValue : undefined,
 	};
+}
+
+/**
+ * Does a shell command match one of the allow-list's scoped Bash grants?
+ *
+ * Grants look like `Bash(git diff:*)` or `Bash(git -C * pull)`. Both the `:*`
+ * suffix form and a trailing `*` mean prefix matching, which is how Claude and
+ * Grok both read them.
+ */
+function commandMatchesAllowedBash(command: string, allow: string[]): boolean {
+	const normalized = command.trim();
+	for (const rule of allow) {
+		const { head, args } = splitRule(rule);
+		if (head !== "Bash") continue;
+		// A bare `Bash` grant permits everything.
+		if (!args) return true;
+		const pattern = args.replace(/:\*$/, "").replace(/\*$/, "").trim();
+		if (!pattern) return true;
+		if (normalized === pattern || normalized.startsWith(`${pattern} `)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -286,14 +319,15 @@ export function describePermissionRequest(params: unknown): {
  */
 export function evaluatePermissionRequest(
 	params: unknown,
-	policy: Pick<GrokToolPolicy, "deny">,
+	policy: Pick<GrokToolPolicy, "deny"> & Partial<Pick<GrokToolPolicy, "allow">>,
 ): { allowed: boolean; reason: string } {
 	if (policy.deny.length === 0) {
 		return { allowed: true, reason: "no restriction in force" };
 	}
 
-	const { hints, explicitlyReadOnly, mcpServer } =
+	const { hints, explicitlyReadOnly, mcpServer, command } =
 		describePermissionRequest(params);
+	const allow = policy.allow ?? [];
 
 	if (explicitlyReadOnly) {
 		return { allowed: true, reason: "tool reports read_only" };
@@ -320,6 +354,29 @@ export function evaluatePermissionRequest(
 				return { allowed: false, reason: `${ruleName} is denied (${hint})` };
 			}
 		}
+
+		// Shell is the escape hatch that makes every other deny cosmetic: a
+		// session denied `Edit` can still edit in place through `sed -i`, commit
+		// by pointing git at another directory, or merge through the GitHub API.
+		// A scoped grant like `Bash(git diff:*)` is meant to permit *only* those
+		// commands, so anything outside the grant is refused — deny rules alone
+		// cannot express that, because deny beats allow in the rule engine.
+		if (ruleNamesForHint(hint).includes("Bash") && allow.length > 0) {
+			if (!command) {
+				return {
+					allowed: false,
+					reason: "shell call with no readable command (fail closed)",
+				};
+			}
+			if (!commandMatchesAllowedBash(command, allow)) {
+				return {
+					allowed: false,
+					reason: `shell command is outside the allow-list: ${command.slice(0, 80)}`,
+				};
+			}
+			return { allowed: true, reason: "shell command matches the allow-list" };
+		}
+
 		// A mutating tool we recognise, whose class is not denied.
 		return { allowed: true, reason: `${hint} is not denied` };
 	}

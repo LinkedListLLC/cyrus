@@ -81,21 +81,76 @@ describe("evaluatePermissionRequest", () => {
 		expect(evaluatePermissionRequest(req, READ_ONLY).allowed).toBe(false);
 	});
 
-	it("allows shell execution when Bash is NOT denied (scoped grant)", () => {
-		// Mirrors the live config: a scoped Bash grant suppresses the blanket deny.
+	describe("a scoped Bash grant permits only the commands it names", () => {
+		// Deny rules cannot express this: deny beats allow, so a blanket `Bash`
+		// deny would also kill the git commands the grant exists to permit.
+		// Without it every other deny is cosmetic — a session denied `Edit` can
+		// still edit in place through the shell.
 		const scoped = translateToolRules([
 			"Read",
-			"Bash(git -C * pull)",
+			"Bash(git diff:*)",
+			"Bash(git log:*)",
 			"mcp__linear",
 		]);
-		expect(scoped.deny).not.toContain("Bash");
-		const req = {
+
+		const shellCall = (command?: string) => ({
 			toolCall: {
 				title: "run_terminal_command",
-				_meta: { "x.ai/tool": { kind: "execute" } },
+				rawInput: command === undefined ? {} : { command },
+				_meta: { "x.ai/tool": { kind: "execute", read_only: false } },
 			},
-		};
-		expect(evaluatePermissionRequest(req, scoped).allowed).toBe(true);
+		});
+
+		it("leaves the blanket Bash deny off, as before", () => {
+			expect(scoped.deny).not.toContain("Bash");
+		});
+
+		it("allows a command inside the grant", () => {
+			expect(
+				evaluatePermissionRequest(shellCall("git diff origin/main"), scoped)
+					.allowed,
+			).toBe(true);
+		});
+
+		it("refuses in-place editing through the shell", () => {
+			const verdict = evaluatePermissionRequest(
+				shellCall("sed -i s/a/b/ src/index.ts"),
+				scoped,
+			);
+			expect(verdict.allowed).toBe(false);
+			expect(verdict.reason).toContain("outside the allow-list");
+		});
+
+		it("refuses committing by pointing git at another directory", () => {
+			// Evades a `git commit` prefix rule, which is why prefix denies alone
+			// were never enough.
+			expect(
+				evaluatePermissionRequest(shellCall("git -C /repo commit -m x"), scoped)
+					.allowed,
+			).toBe(false);
+		});
+
+		it("refuses merging through the GitHub API", () => {
+			expect(
+				evaluatePermissionRequest(
+					shellCall("gh api -X PUT repos/o/r/pulls/1/merge"),
+					scoped,
+				).allowed,
+			).toBe(false);
+		});
+
+		it("fails closed when the command cannot be read", () => {
+			expect(evaluatePermissionRequest(shellCall(), scoped).allowed).toBe(
+				false,
+			);
+		});
+
+		it("still allows everything when the grant is a bare Bash", () => {
+			const bare = translateToolRules(["Read", "Bash"]);
+			expect(
+				evaluatePermissionRequest(shellCall("rm -rf /tmp/x"), bare).allowed,
+			).toBe(true);
+		});
 	});
 
 	it("understands ACP's own kind field without x.ai metadata", () => {
