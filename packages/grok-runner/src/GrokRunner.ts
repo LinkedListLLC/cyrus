@@ -94,6 +94,8 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 	private logDir: string | null = null;
 	/** Tools refused by policy during the current turn (drives the continuation). */
 	private deniedThisTurn: string[] = [];
+	/** Every policy refusal in this session, surfaced on the result message. */
+	private deniedThisSession: Array<{ tool: string; reason: string }> = [];
 
 	constructor(config: GrokRunnerConfig) {
 		super();
@@ -118,6 +120,7 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		};
 		this.wasStopped = false;
 		this.messages = [];
+		this.deniedThisSession = [];
 		this.activeSessionId = null;
 
 		const workspace = resolve(this.config.workingDirectory || process.cwd());
@@ -330,13 +333,21 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 					return undefined;
 				}
 				const verdict = evaluatePermissionRequest(params, policy);
+				const { hints } = describePermissionRequest(params);
+				const tool = hints[0] ?? "a tool";
+
 				if (verdict.allowed) {
+					// undefined falls through to the client's default auto-approve.
+					this.writeAcpReverseRpcLog(method, params, undefined, "allowed");
 					return undefined;
 				}
+
 				this.logger.info(`Denied a tool permission request: ${verdict.reason}`);
-				const { hints } = describePermissionRequest(params);
-				this.deniedThisTurn.push(hints[0] ?? "a tool");
-				return buildRejectionOutcome(params);
+				this.deniedThisTurn.push(tool);
+				this.deniedThisSession.push({ tool, reason: verdict.reason });
+				const response = buildRejectionOutcome(params);
+				this.writeAcpReverseRpcLog(method, params, response, "denied");
+				return response;
 			},
 			onNotification: (n) => this.handleNotification(n),
 			onStderr: (chunk) => {
@@ -529,6 +540,7 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 
 		this.mapper?.finalize({
 			stopReason: promptResult?.stopReason,
+			permissionDenials: this.deniedThisSession,
 		});
 	}
 
@@ -745,12 +757,39 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 	}
 
 	private writeAcpWireLog(update: AcpSessionUpdate): void {
+		this.writeAcpWireEntry({ type: "session-update", update });
+	}
+
+	/**
+	 * Record an agent→client request and the answer we gave it.
+	 *
+	 * Until this existed the wire log held only `session-update` notifications,
+	 * so the permission handshake was invisible: diagnosing CYR-12 meant proving
+	 * a negative from 746 lines that *couldn't* have contained the evidence
+	 * either way. Permission decisions are the one part of a restricted session
+	 * an operator most needs to audit, so they belong on the wire.
+	 */
+	private writeAcpReverseRpcLog(
+		method: string,
+		params: unknown,
+		response: unknown,
+		decision: "allowed" | "denied" | "passthrough",
+	): void {
+		this.writeAcpWireEntry({
+			type: "agent-request",
+			method,
+			decision,
+			params,
+			response,
+		});
+	}
+
+	private writeAcpWireEntry(entry: Record<string, unknown>): void {
 		if (!this.acpWireStream) return;
 		try {
 			this.acpWireStream.write(
 				`${JSON.stringify({
-					type: "session-update",
-					update,
+					...entry,
 					timestamp: new Date().toISOString(),
 				})}\n`,
 			);
