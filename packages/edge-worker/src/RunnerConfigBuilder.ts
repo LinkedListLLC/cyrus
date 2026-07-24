@@ -351,6 +351,11 @@ export class RunnerConfigBuilder {
 			modelOverride = this.runnerSelector.getDefaultModelForRunner("cursor");
 			fallbackModelOverride =
 				this.runnerSelector.getDefaultFallbackModelForRunner("cursor");
+		} else if (input.session.grokSessionId && runnerType !== "grok") {
+			runnerType = "grok";
+			modelOverride = this.runnerSelector.getDefaultModelForRunner("grok");
+			fallbackModelOverride =
+				this.runnerSelector.getDefaultFallbackModelForRunner("grok");
 		}
 
 		// Log model override if found
