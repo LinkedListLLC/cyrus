@@ -17,6 +17,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The Claude Code CLI that Cyrus drives (provides the `claude` binary on PATH).
 RUN npm install -g @anthropic-ai/claude-code
 
+# The Grok Build CLI that the grok-runner drives as `grok agent stdio`.
+# xAI publishes no official npm package (`@xai/grok-cli` does not exist; the npm
+# results are third-party forks), so this is their install script.
+#
+# The installer keeps the real binary in $HOME/.grok/downloads and installs only
+# *symlinks* to it — both at $GROK_BIN_DIR/grok and, when running as root, at
+# /usr/local/bin/grok. Every one of those links would break here: /root/.grok is
+# redirected into the persisted volume at runtime (see docker-entrypoint.sh), so
+# nothing baked into the image at that path survives. Hence: install under a
+# throwaway HOME, resolve the symlink chain to the actual file, and copy *that*
+# into /usr/local/bin — a real, standalone binary on PATH and outside the volume.
+# The trailing `rm -rf /root/.grok` clears the empty directory the CLI creates on
+# its first run; leaving it would block the entrypoint's symlink and silently
+# cost us auth persistence.
+RUN GROK_TMP="$(mktemp -d)" \
+ && HOME="$GROK_TMP" GROK_BIN_DIR="$GROK_TMP/bin" \
+      bash -c 'curl -fsSL https://x.ai/cli/install.sh | bash' \
+ && GROK_REAL="$(readlink -f "$GROK_TMP/bin/grok")" \
+ && rm -f /usr/local/bin/grok /usr/local/bin/agent \
+ && cp "$GROK_REAL" /usr/local/bin/grok \
+ && chmod +x /usr/local/bin/grok \
+ && rm -rf "$GROK_TMP" \
+ && grok --version \
+ && rm -rf /root/.grok
+
 # pnpm via corepack, pinned to the repo's packageManager version.
 ENV PNPM_HOME=/root/.local/share/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -46,6 +71,17 @@ ENV CYRUS_HOST_EXTERNAL=true
 # so disable the IP allowlist here. Set to "true" only if the container is
 # exposed directly to the internet with no proxy in front.
 ENV WEBHOOK_IP_VALIDATION=false
+
+# Grok Build. GROK_PATH pins the binary we baked in above, so resolution never
+# falls through to a stale ~/.grok/bin/grok inside the volume. GROK_HOME points
+# Cyrus's grok-runner at a directory *inside* the persisted /root/.cyrus volume,
+# which the entrypoint also symlinks /root/.grok to — belt and braces, because
+# the grok CLI's own tooling is $HOME/.grok-centric while Cyrus reads $GROK_HOME.
+# Auto-update is off: the binary sits in a read-only image layer, and a silent
+# self-update would drift the container away from the image it was built from.
+ENV GROK_PATH=/usr/local/bin/grok
+ENV GROK_HOME=/root/.cyrus/grok
+ENV GROK_DISABLE_AUTOUPDATER=1
 
 EXPOSE 3456
 

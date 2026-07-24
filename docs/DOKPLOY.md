@@ -119,6 +119,41 @@ volume across redeploys.
 3. **Remove** `CYRUS_SETUP_IDLE` and redeploy. Cyrus boots with the token + repo
    already present and starts serving webhooks.
 
+## Optional: Grok Build as a second runner
+
+Cyrus can run agent sessions on **Grok Build** instead of Claude Code, selected
+per issue with a `grok` Linear label or an `[agent=grok]` tag in the issue
+description (or globally with `"defaultRunner": "grok"` in `config.json`).
+
+The image already ships the `grok` binary at `/usr/local/bin/grok`, so only the
+one-time login is manual — it's a **browser OAuth against your Grok
+subscription**, which can't be passed as an env var.
+
+1. Add env `CYRUS_SETUP_IDLE=true` and redeploy (same idle trick as the Linear
+   OAuth above), then open the Application's **Terminal**:
+   ```bash
+   grok login     # prints a URL — open it in your browser and approve
+   grok models    # verify: should report you're logged in and list a default model
+   ```
+2. **Remove** `CYRUS_SETUP_IDLE` and redeploy.
+
+**Why the login survives redeploys.** `GROK_HOME=/root/.cyrus/grok` puts the
+CLI's entire home — `auth.json`, `config.toml`, `agent_id` — *inside* the
+`cyrus-data` volume, and the entrypoint additionally symlinks `/root/.grok` to
+the same place (the CLI's own tooling is `$HOME/.grok`-centric, Cyrus reads
+`$GROK_HOME`; both now resolve to the persisted directory). Verified: with
+`GROK_HOME` set, the CLI writes everything there and leaves `/root/.grok` empty.
+
+**Notes.**
+- `XAI_API_KEY` is only a headless fallback and **bills per-token via the xAI
+  API** — it defeats the point of a subscription. Prefer `grok login`.
+- Auto-update is disabled (`GROK_DISABLE_AUTOUPDATER=1`): the binary lives in a
+  read-only image layer, so upgrades happen by rebuilding the image.
+- The `grok` CLI adds ~130 MB to the image.
+- ⚠️ Cyrus's tool-restriction and skills layers (`allowedTools`, `labelPrompts`,
+  `~/.cyrus/skills`) are **Claude-first**. Don't assume a `readOnly` preset
+  constrains a Grok session until it's been checked.
+
 ## Verify
 
 - Container logs show the server listening on `0.0.0.0:3456`.
