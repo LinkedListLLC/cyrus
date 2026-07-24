@@ -7,6 +7,9 @@ export { GrokEventMapper, projectGrokToolName } from "./GrokEventMapper.js";
 export { GrokRunner } from "./GrokRunner.js";
 export { hasGrokCachedAuth, resolveGrokBinary } from "./grokBinary.js";
 export {
+	buildRejectionOutcome,
+	describePermissionRequest,
+	evaluatePermissionRequest,
 	type GrokToolPolicy,
 	translateToolRule,
 	translateToolRules,

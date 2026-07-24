@@ -176,3 +176,193 @@ export function translateToolRules(
 
 	return { allow, deny, untranslated, scopedBashUnenforceable };
 }
+
+/* -------------------------------------------------------------------------
+ * Client-side enforcement of the policy, over ACP.
+ *
+ * Passing `--allow`/`--deny` to the CLI turned out NOT to be enough. Verified
+ * live on CYR-9: the spawned process carried `--deny Write`, the agent wrote a
+ * file anyway, and its ACP wire log for that session contained 746 updates and
+ * **zero** `session/request_permission` requests — the write completed in 7ms
+ * with no permission handshake at all. `--always-approve` (Grok's
+ * `bypassPermissions`) short-circuits the rule engine before deny rules are
+ * consulted, contrary to its documentation.
+ *
+ * So enforcement has to happen where ACP actually puts the decision: the
+ * client. Two changes work together —
+ *   1. the runner stops passing `--always-approve` when a restriction is in
+ *      force, so the agent asks instead of proceeding silently, and
+ *   2. the client answers those asks against the policy instead of
+ *      blanket-approving them (`autoApprovePermission`).
+ * ---------------------------------------------------------------------- */
+
+/** Grok/ACP tool identifiers that mean "this call mutates the workspace". */
+const MUTATING_TOOL_HINTS = new Set([
+	// ACP ToolKind values
+	"edit",
+	"delete",
+	"move",
+	"execute",
+	// Grok/opencode tool names seen on the wire
+	"write",
+	"search_replace",
+	"create_file",
+	"apply_patch",
+	"notebook_edit",
+	"bash",
+	"run_terminal_command",
+	"run_command",
+	"shell",
+]);
+
+/** Which rule name a mutating tool should be checked against. */
+function ruleNamesForHint(hint: string): string[] {
+	switch (hint) {
+		case "execute":
+		case "bash":
+		case "run_terminal_command":
+		case "run_command":
+		case "shell":
+			return ["Bash"];
+		case "notebook_edit":
+			return ["NotebookEdit", "Edit"];
+		default:
+			return ["Write", "Edit"];
+	}
+}
+
+/**
+ * Pull the identifying strings out of an ACP `session/request_permission`
+ * payload. The shape is not contractual, so read every plausible field rather
+ * than betting on one: Grok carries its own descriptor under
+ * `_meta["x.ai/tool"]` (`{name, kind, label, read_only}`), while ACP proper
+ * uses `toolCall.kind` and `toolCall.title`.
+ */
+export function describePermissionRequest(params: unknown): {
+	hints: string[];
+	explicitlyReadOnly: boolean;
+	mcpServer?: string;
+} {
+	const p = (params ?? {}) as Record<string, unknown>;
+	const toolCall = (p.toolCall ?? p.tool_call ?? p) as Record<string, unknown>;
+	const meta = (toolCall._meta ?? {}) as Record<string, unknown>;
+	const xai = (meta["x.ai/tool"] ?? {}) as Record<string, unknown>;
+
+	const raw = [
+		xai.name,
+		xai.kind,
+		xai.label,
+		toolCall.kind,
+		toolCall.title,
+		toolCall.name,
+	].filter((v): v is string => typeof v === "string" && v.length > 0);
+
+	const hints = raw.map((s) => s.toLowerCase());
+
+	// An MCP tool call is named `server__tool`; the rule form is MCPTool(...).
+	let mcpServer: string | undefined;
+	for (const value of raw) {
+		const match = value.match(/^([A-Za-z0-9_.-]+?)__[A-Za-z0-9_.-]+$/);
+		if (match?.[1]) {
+			mcpServer = match[1];
+			break;
+		}
+	}
+
+	return {
+		hints,
+		explicitlyReadOnly: xai.read_only === true || toolCall.read_only === true,
+		mcpServer,
+	};
+}
+
+/**
+ * Decide whether a permission request may proceed under the policy.
+ *
+ * Fails **closed**: with a restriction in force, a request we cannot classify
+ * is denied. A guardrail that quietly allows the calls it does not recognise is
+ * not a guardrail — and over-blocking surfaces loudly in the session transcript,
+ * where it can be fixed, rather than silently letting a write through.
+ */
+export function evaluatePermissionRequest(
+	params: unknown,
+	policy: Pick<GrokToolPolicy, "deny">,
+): { allowed: boolean; reason: string } {
+	if (policy.deny.length === 0) {
+		return { allowed: true, reason: "no restriction in force" };
+	}
+
+	const { hints, explicitlyReadOnly, mcpServer } =
+		describePermissionRequest(params);
+
+	if (explicitlyReadOnly) {
+		return { allowed: true, reason: "tool reports read_only" };
+	}
+
+	const denied = new Set(policy.deny.map((rule) => splitRule(rule).head));
+
+	if (mcpServer) {
+		const blocked = policy.deny.some((rule) => {
+			const { head, args } = splitRule(rule);
+			if (head !== "MCPTool" || !args) return false;
+			const server = args.split("__")[0];
+			return server === "*" || server === mcpServer;
+		});
+		return blocked
+			? { allowed: false, reason: `MCP server '${mcpServer}' is denied` }
+			: { allowed: true, reason: `MCP server '${mcpServer}' is not denied` };
+	}
+
+	for (const hint of hints) {
+		if (!MUTATING_TOOL_HINTS.has(hint)) continue;
+		for (const ruleName of ruleNamesForHint(hint)) {
+			if (denied.has(ruleName)) {
+				return { allowed: false, reason: `${ruleName} is denied (${hint})` };
+			}
+		}
+		// A mutating tool we recognise, whose class is not denied.
+		return { allowed: true, reason: `${hint} is not denied` };
+	}
+
+	if (hints.length === 0) {
+		return { allowed: false, reason: "unidentifiable tool call (fail closed)" };
+	}
+	// Non-mutating and unrecognised (e.g. "think", "fetch"): let it through.
+	return {
+		allowed: true,
+		reason: `no mutating signal in [${hints.join(", ")}]`,
+	};
+}
+
+/**
+ * Build the ACP response that refuses a permission request, preferring an
+ * explicit reject option when the agent offers one and falling back to
+ * cancelling the call.
+ */
+export function buildRejectionOutcome(params: unknown): unknown {
+	const p = (params ?? {}) as {
+		options?: Array<{
+			optionId?: string;
+			option_id?: string;
+			kind?: string;
+			name?: string;
+		}>;
+	};
+	const options = Array.isArray(p.options) ? p.options : [];
+	const reject = options.find((o) => {
+		const kind = (o.kind || "").toLowerCase();
+		const name = (o.name || "").toLowerCase();
+		return (
+			kind.startsWith("reject") ||
+			kind === "deny" ||
+			name.includes("reject") ||
+			name.includes("deny") ||
+			name.includes("no")
+		);
+	});
+	const optionId = reject?.optionId || reject?.option_id;
+	if (optionId) {
+		return { outcome: { outcome: "selected", optionId } };
+	}
+	return { outcome: { outcome: "cancelled" } };
+}
