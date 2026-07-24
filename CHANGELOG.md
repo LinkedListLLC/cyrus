@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- New per-repository `reviewOnStatus` setting: name a Linear workflow state (for example `"In Review"`) and Cyrus automatically reviews the pull request when an issue moves into it. The review runs as a separate agent session against a clean checkout of the PR head, so it is an independent review rather than the author checking its own work, and posts a structured verdict (Blocking / Non-blocking / Nits) back to the issue. The review session cannot edit files, commit, push, or merge. Omit the setting to keep the previous behavior. ([CYR-5](https://linear.app/ceedar/issue/CYR-5))
+
 ### Fixed
 - Read-only Claude sessions can run the shell commands they were granted again. A session configured with narrowed commands (for example a reviewer allowed `git diff`, `git log` and `gh pr diff`) was silently given no shell at all, because a narrowed grant could not be enforced and was therefore dropped. Such a reviewer read the files at the tip of a branch with no way to see what had actually changed, and reported back as if it had. The narrowing is now enforced directly, so the granted commands run and everything else is refused. ([CYR-20](https://linear.app/linkedlist/issue/CYR-20/enforce-narrowed-bash-grants-on-the-claude-path-via-canusetool), [#9](https://github.com/LinkedListLLC/cyrus/pull/9))
 - Forwarded and shared Slack messages are now included when you @mention Cyrus. Previously, forwarding a message (for example a Sentry alert) into a channel and @mentioning Cyrus passed along only your typed comment — the forwarded message's contents were dropped, so a forward with no comment gave Cyrus nothing to work with. The forwarded content is now part of the prompt. ([#1326](https://github.com/cyrusagents/cyrus/pull/1326))

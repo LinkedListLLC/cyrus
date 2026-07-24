@@ -317,6 +317,20 @@ export const RepositoryConfigSchema = z.object({
 
 	// Repository-specific user access control
 	userAccessControl: UserAccessControlConfigSchema.optional(),
+
+	/**
+	 * Name of the Linear workflow state that triggers an automatic, read-only
+	 * code review (e.g. `"In Review"`). Matched against the state's **name**,
+	 * case-insensitively and whitespace-trimmed.
+	 *
+	 * When an issue routed to this repository transitions into that state,
+	 * Cyrus mints a fresh Linear agent session and runs a review in a clean,
+	 * detached worktree at the PR head. The review can never edit, commit or
+	 * push — see `REVIEW_ALLOWED_TOOLS` / `REVIEW_DISALLOWED_TOOLS`.
+	 *
+	 * Unset (the default) disables the feature for this repository.
+	 */
+	reviewOnStatus: z.string().optional(),
 });
 
 /**
