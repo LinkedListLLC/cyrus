@@ -1,3 +1,6 @@
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -150,5 +153,95 @@ describe("continuing a turn after a policy denial", () => {
 
 		// 1 original + MAX_DENIAL_CONTINUATIONS (2)
 		expect(promptCalls()).toHaveLength(3);
+	});
+});
+
+describe("reporting denials on the result message", () => {
+	beforeEach(() => {
+		requests.length = 0;
+		pendingPermissionRequests = [];
+	});
+
+	it("names the refused tool in permission_denials", async () => {
+		pendingPermissionRequests = [writePermissionRequest];
+		const runner = makeRunner(["Read(**)"]);
+		await runner.start("try to write");
+
+		const result = runner
+			.getMessages()
+			.find((m) => m.type === "result") as unknown as {
+			permission_denials: Array<{ tool_name: string; reason: string }>;
+		};
+
+		// Previously hard-coded empty, so a caller could not tell "chose not to"
+		// from "was not allowed to".
+		expect(result.permission_denials).toHaveLength(1);
+		expect(result.permission_denials[0]?.tool_name).toBe("write");
+		expect(result.permission_denials[0]?.reason).toMatch(/denied/i);
+	});
+
+	it("leaves permission_denials empty when nothing was refused", async () => {
+		pendingPermissionRequests = [];
+		const runner = makeRunner(["Read(**)"]);
+		await runner.start("just read");
+
+		const result = runner
+			.getMessages()
+			.find((m) => m.type === "result") as unknown as {
+			permission_denials: unknown[];
+		};
+		expect(result.permission_denials).toEqual([]);
+	});
+});
+
+describe("auditing the permission handshake on the wire", () => {
+	beforeEach(() => {
+		requests.length = 0;
+		pendingPermissionRequests = [];
+	});
+
+	it("records the request and our answer, so a denial is provable after the fact", async () => {
+		// The gap this closes: diagnosing CYR-12 meant proving a negative from a
+		// log that could not have held the evidence either way.
+		const home = mkdtempSync(join(tmpdir(), "cyrus-wire-"));
+		pendingPermissionRequests = [writePermissionRequest];
+
+		const runner = new GrokRunner({
+			cyrusHome: home,
+			workingDirectory: "/tmp",
+			workspaceName: "CYR-TEST",
+			allowedTools: ["Read(**)"],
+			// biome-ignore lint/suspicious/noExplicitAny: test config shim
+		} as any);
+		await runner.start("try to write");
+
+		// Two wire files exist per session: logging is opened once as "pending"
+		// and re-opened under the real session id, so read them all. The streams
+		// also flush asynchronously after start() resolves.
+		const logsDir = join(home, "logs", "CYR-TEST");
+		let lines: Array<Record<string, unknown>> = [];
+		for (let attempt = 0; attempt < 40 && lines.length === 0; attempt++) {
+			lines = readdirSync(logsDir)
+				.filter((f) => f.startsWith("acp-wire-grok-"))
+				.flatMap((f) =>
+					readFileSync(join(logsDir, f), "utf8")
+						.trim()
+						.split("\n")
+						.filter(Boolean)
+						.map((l) => JSON.parse(l)),
+				);
+			if (lines.length === 0) {
+				await new Promise((r) => setTimeout(r, 25));
+			}
+		}
+		expect(lines.length).toBeGreaterThan(0);
+
+		const handshake = lines.find((l) => l.type === "agent-request");
+		expect(handshake).toBeDefined();
+		expect(handshake.method).toContain("request_permission");
+		expect(handshake.decision).toBe("denied");
+		// Both halves must be there: what was asked, and what we answered.
+		expect(JSON.stringify(handshake.params)).toContain("write");
+		expect(JSON.stringify(handshake.response)).toContain("outcome");
 	});
 });
