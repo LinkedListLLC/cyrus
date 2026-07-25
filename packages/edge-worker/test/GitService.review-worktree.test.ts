@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -174,6 +175,28 @@ describe("GitService.createReviewWorktree", () => {
 		expect(worktree.usedFallbackRef).toBe(true);
 	});
 
+	// CYR-16, non-blocking. A merged or deleted remote branch leaves only a stale
+	// local copy, which is not the pull request. Falling back to it is allowed,
+	// but it must be announced rather than passed off as the PR head.
+	it("flags the local branch as a fallback when the remote head is gone", async () => {
+		// The PR branch exists locally but was never pushed / has been deleted.
+		git("checkout -b local-only", repoPath);
+		writeFileSync(join(repoPath, "app.ts"), "export const answer = 43;\n");
+		git("add .", repoPath);
+		git('commit -m "local work"', repoPath);
+		git("checkout main", repoPath);
+
+		const worktree = await gitService.createReviewWorktree({
+			repository,
+			reviewId: "session-abcdef123456",
+			issueIdentifier: "TEST-1",
+			branchName: "local-only",
+		});
+
+		expect(worktree.checkoutRef).toBe("local-only");
+		expect(worktree.usedFallbackRef).toBe(true);
+	});
+
 	it("rejects a repository path that is not a git repository", async () => {
 		const notARepo = join(tmpRoot, "not-a-repo");
 		mkdirSync(notARepo, { recursive: true });
@@ -202,6 +225,40 @@ describe("GitService.createReviewWorktree", () => {
 		expect(git("worktree list --porcelain", repoPath)).not.toContain(
 			worktree.path,
 		);
+	});
+
+	// CYR-16 / B2. A detached linked worktree keeps its refs and object store in
+	// the *main* repository, so a sandbox allowed only `worktree.path` cannot run
+	// the `git diff`/`git log` the whole review is built on. This pins the fact
+	// that made `allowedDirectories = [worktree.path]` wrong.
+	it("keeps its git metadata outside the worktree, so the worktree path alone is not enough", async () => {
+		const worktree = await gitService.createReviewWorktree({
+			repository,
+			reviewId: "session-abcdef123456",
+			issueIdentifier: "TEST-1",
+			branchName: "feature-x",
+		});
+
+		const metadataDirs = gitService
+			.getGitMetadataDirectories(worktree.path)
+			.map((dir) => realpathSync(dir));
+		const realWorktreePath = realpathSync(worktree.path);
+		const realRepoPath = realpathSync(repoPath);
+
+		expect(metadataDirs.length).toBeGreaterThan(0);
+		// Every one of them is outside the checkout the reviewer is sandboxed to.
+		for (const dir of metadataDirs) {
+			expect(dir.startsWith(realWorktreePath)).toBe(false);
+		}
+		// Specifically: the linked worktree's own metadata and the shared object
+		// store, both under the main repository.
+		expect(
+			metadataDirs.some((dir) => dir.includes(join(".git", "worktrees"))),
+		).toBe(true);
+		expect(metadataDirs).toContain(join(realRepoPath, ".git"));
+
+		// And git genuinely needs them: reading the diff resolves through them.
+		expect(git("diff origin/main --stat", worktree.path)).toContain("app.ts");
 	});
 
 	it("recreates cleanly after a leftover directory from a crashed review", async () => {
