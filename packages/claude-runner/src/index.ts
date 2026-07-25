@@ -9,6 +9,13 @@ export type {
 	StopHookInput,
 	WarmQuery,
 } from "@anthropic-ai/claude-agent-sdk";
+export {
+	type DeriveBuiltInToolsOptions,
+	deriveBuiltInTools,
+	KNOWN_BUILT_IN_TOOLS,
+	MUTATING_BUILT_IN_TOOLS,
+	READ_ONLY_SEARCH_TOOLS,
+} from "./built-in-tool-restrictions.js";
 export { AbortError, ClaudeRunner } from "./ClaudeRunner.js";
 export {
 	availableTools,

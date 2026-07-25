@@ -95,9 +95,17 @@ export const LINEAR_DEFAULT_ALLOWED_TOOLS = [
  * Slack sessions are transient — no PRs opened, no worktree checkouts.
  * The default list grants read-only access to repository sources (so Cyrus
  * can answer "look at the code in repo X" questions) plus the standard
- * planning/task tools, but no Edit/Write/general Bash. The single Bash
- * pattern allowed is `git -C * pull` so a chat session can refresh a
- * repo before grepping it.
+ * planning/task tools, but no Edit/Write and no general Bash.
+ *
+ * Note on `Bash(git -C * pull)`: an argument-narrowed entry like this grants
+ * nothing on the Claude path. `allowedTools` patterns only *auto-approve* —
+ * they never deny — so a `Bash(...)` pattern cannot confine Bash to the one
+ * command it names. Rather than hand a read-only chat session an arbitrary
+ * shell, `deriveBuiltInTools` (cyrus-claude-runner) fails closed and withholds
+ * Bash entirely; chat sessions read and search with Read/Grep/Glob instead.
+ * The entry is retained because other runners (e.g. Grok, Cursor) translate
+ * `allowedTools` into their own natively-enforced permission rules, where the
+ * narrowing is meaningful.
  */
 export const SLACK_DEFAULT_ALLOWED_TOOLS = [
 	// Read access to configured repository paths

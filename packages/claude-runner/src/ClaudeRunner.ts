@@ -30,6 +30,7 @@ import {
 	StreamingPrompt,
 } from "cyrus-core";
 import dotenv from "dotenv";
+import { deriveBuiltInTools } from "./built-in-tool-restrictions.js";
 import { ClaudeMessageFormatter, type IMessageFormatter } from "./formatter.js";
 import { buildHomeDirectoryDisallowedTools } from "./home-directory-restrictions.js";
 import {
@@ -571,6 +572,32 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 				);
 			}
 
+			// Restrict the built-in toolset to what `allowedTools` actually grants.
+			//
+			// `allowedTools` alone does NOT restrict anything — the SDK typings are
+			// explicit that it is an auto-approve list and that `tools` is the option
+			// to "restrict which tools are available". Without this, a `readOnly`
+			// persona still has Write/Edit/Bash in context. An explicit
+			// `config.tools` always wins; otherwise we derive the set. MCP tools are
+			// unaffected by `tools`, so `mcp__linear` and friends stay reachable.
+			const derivedTools =
+				this.config.tools !== undefined
+					? this.config.tools
+					: deriveBuiltInTools(processedAllowedTools, {
+							// Setting `tools` drops AskUserQuestion from the built-in set,
+							// which would break the interception in canUseTool.
+							includeAskUserQuestion: this.canUseToolCallback !== undefined,
+							onDropped: (entry, reason) => {
+								this.logger.warn(
+									`Not granting built-in tool for allowedTools entry "${entry}": ${reason}`,
+								);
+							},
+						});
+
+			if (derivedTools !== undefined) {
+				this.logger.debug("Built-in tools available to model:", derivedTools);
+			}
+
 			// Parse MCP config - merge file(s) and inline configs
 			let mcpServers = {};
 
@@ -728,7 +755,7 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 					...(this.config.skills !== undefined && {
 						skills: this.config.skills,
 					}),
-					...(this.config.tools !== undefined && { tools: this.config.tools }),
+					...(derivedTools !== undefined && { tools: derivedTools }),
 					...(this.config.maxTurns && { maxTurns: this.config.maxTurns }),
 					...(this.config.outputFormat && {
 						outputFormat: this.config.outputFormat,
