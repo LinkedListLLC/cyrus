@@ -248,7 +248,7 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		}
 		if (policy.scopedBashUnenforceable) {
 			this.logger.info(
-				"Bash is scoped to specific commands in allowedTools, which Grok cannot enforce with rules alone (deny beats allow) — Bash is left UNRESTRICTED for this session.",
+				"Bash is scoped to specific commands in allowedTools, which Grok cannot enforce with rules alone (deny beats allow) — no blanket Bash deny is sent. The scope is enforced client-side instead: every command in a shell call must match one of the grants, chained commands included.",
 			);
 		}
 		if (policy.deny.length > 0) {
