@@ -1070,9 +1070,11 @@ export class GitService {
 			);
 		}
 
-		const usedFallbackRef =
-			checkoutRef !== `origin/${sanitizedBranch}` &&
-			checkoutRef !== sanitizedBranch;
+		// Anything other than the pushed head is a fallback worth announcing —
+		// including the *local* branch. If `origin/<branch>` is gone because the
+		// PR was merged or the branch deleted, a stale local copy is not the pull
+		// request, and reviewing it silently would misrepresent what was read.
+		const usedFallbackRef = checkoutRef !== `origin/${sanitizedBranch}`;
 
 		// Session-scoped path — never the issue-keyed builder worktree. Sits under
 		// the repo's configured workspace dir so reviews land on whichever disk the

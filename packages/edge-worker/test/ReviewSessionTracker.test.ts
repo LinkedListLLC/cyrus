@@ -147,7 +147,7 @@ describe("ReviewSessionTracker - session markers", () => {
 		tracker.beginReview(context);
 		tracker.attachSessionId("issue-1", "session-1");
 
-		expect(tracker.takeContext("session-1", "issue-1")).toEqual(context);
+		expect(tracker.takeContext("session-1")).toEqual(context);
 	});
 
 	it("consumes the marker exactly once", () => {
@@ -155,47 +155,27 @@ describe("ReviewSessionTracker - session markers", () => {
 		tracker.beginReview(makeContext());
 		tracker.attachSessionId("issue-1", "session-1");
 
-		expect(tracker.takeContext("session-1", "issue-1")).toBeDefined();
-		expect(tracker.takeContext("session-1", "issue-1")).toBeUndefined();
+		expect(tracker.takeContext("session-1")).toBeDefined();
+		expect(tracker.takeContext("session-1")).toBeUndefined();
 	});
 
-	it("does not claim an unrelated session on the same issue", () => {
-		const tracker = new ReviewSessionTracker();
-		tracker.beginReview(makeContext());
-		tracker.attachSessionId("issue-1", "session-1");
-
-		// A human-started session arrives with a different id. It must consume
-		// nothing... but the pending-by-issue marker is already reconciled, so the
-		// only match is by session id.
-		expect(tracker.takeContext("other-session")).toBeUndefined();
-		expect(tracker.takeContext("session-1", "issue-1")).toBeDefined();
-	});
-
-	it("claims by issue id when the webhook beats the mint (race)", () => {
-		const tracker = new ReviewSessionTracker();
-		const context = makeContext();
-		tracker.beginReview(context);
-
-		// Webhook arrives before `attachSessionId` — session id is unknown to us.
-		expect(tracker.takeContext("session-early", "issue-1")).toEqual(context);
-	});
-
-	it("tells the mint the marker was already claimed so it does not double-start", () => {
-		const tracker = new ReviewSessionTracker();
-		tracker.beginReview(makeContext());
-		tracker.takeContext("session-early", "issue-1");
-
-		expect(tracker.attachSessionId("issue-1", "session-early")).toBe(false);
-	});
-
-	it("confirms reconciliation when the marker is still pending", () => {
+	it("confirms the binding when a mint is in flight", () => {
 		const tracker = new ReviewSessionTracker();
 		tracker.beginReview(makeContext());
 
 		expect(tracker.attachSessionId("issue-1", "session-1")).toBe(true);
 	});
 
-	it("will not hijack a session started long after a failed mint", () => {
+	it("refuses to bind when the review was already abandoned", () => {
+		const tracker = new ReviewSessionTracker();
+		tracker.beginReview(makeContext());
+		tracker.abandonReview("issue-1");
+
+		expect(tracker.attachSessionId("issue-1", "session-1")).toBe(false);
+		expect(tracker.takeContext("session-1")).toBeUndefined();
+	});
+
+	it("refuses to bind, and releases the guard, when the mint outlived the marker", () => {
 		let now = 1_000;
 		const tracker = new ReviewSessionTracker({
 			pendingTtlMs: 500,
@@ -204,12 +184,120 @@ describe("ReviewSessionTracker - session markers", () => {
 		tracker.beginReview(makeContext());
 
 		now += 501;
-		expect(tracker.takeContext("human-session", "issue-1")).toBeUndefined();
+		expect(tracker.attachSessionId("issue-1", "session-late")).toBe(false);
+		expect(tracker.takeContext("session-late")).toBeUndefined();
+		// A later transition must still be able to start a fresh review.
 		expect(tracker.hasReviewInFlight("issue-1")).toBe(false);
 	});
 
-	it("returns nothing for issues that never started a review", () => {
+	it("returns nothing for a session that was never a review", () => {
 		const tracker = new ReviewSessionTracker();
-		expect(tracker.takeContext("session-1", "issue-unknown")).toBeUndefined();
+		expect(tracker.takeContext("session-1")).toBeUndefined();
+	});
+});
+
+/**
+ * CYR-16 / B4. The marker used to be keyed by issue id and handed to any agent
+ * session appearing on that issue inside a 5-minute window. These pin the
+ * property that replaced it: a marker belongs to exactly one session id.
+ */
+describe("ReviewSessionTracker - the marker belongs to one session (CYR-16 / B4)", () => {
+	it("does not hand the review marker to a different session on the same issue", () => {
+		const tracker = new ReviewSessionTracker();
+		const context = makeContext();
+		tracker.beginReview(context);
+		tracker.attachSessionId("issue-1", "review-session");
+
+		// A human delegates the same issue. It gets nothing...
+		expect(tracker.takeContext("human-session")).toBeUndefined();
+		expect(tracker.isReviewSession("human-session")).toBe(false);
+		// ...and the real review session still has its marker.
+		expect(tracker.takeContext("review-session")).toEqual(context);
+	});
+
+	it("gives a mid-mint human session nothing, even before the session id is known", () => {
+		const tracker = new ReviewSessionTracker();
+		tracker.beginReview(makeContext());
+
+		// The mint has not returned yet: no session id is bound. Previously this
+		// window handed the marker to whoever asked; now nothing is claimable.
+		expect(tracker.takeContext("human-session")).toBeUndefined();
+
+		// And the real session, once minted, still gets it.
+		expect(tracker.attachSessionId("issue-1", "review-session")).toBe(true);
+		expect(tracker.takeContext("review-session")).toBeDefined();
+	});
+
+	it("remembers a claimed session so a late echo is not restarted as a builder", () => {
+		const tracker = new ReviewSessionTracker();
+		tracker.beginReview(makeContext());
+		tracker.attachSessionId("issue-1", "review-session");
+		tracker.takeContext("review-session");
+
+		// The marker is spent, but the session is still recognisably a review.
+		expect(tracker.takeContext("review-session")).toBeUndefined();
+		expect(tracker.isReviewSession("review-session")).toBe(true);
+		expect(tracker.isReviewSession("human-session")).toBe(false);
+	});
+
+	it("expires the claimed-session memory rather than growing without bound", () => {
+		let now = 1_000;
+		const tracker = new ReviewSessionTracker({
+			activeTtlMs: 500,
+			now: () => now,
+		});
+		tracker.beginReview(makeContext());
+		tracker.attachSessionId("issue-1", "review-session");
+		tracker.takeContext("review-session");
+
+		expect(tracker.isReviewSession("review-session")).toBe(true);
+		now += 501;
+		expect(tracker.isReviewSession("review-session")).toBe(false);
+	});
+});
+
+describe("ReviewSessionTracker - awaitPendingMint", () => {
+	it("resolves immediately when no mint is in flight", async () => {
+		const tracker = new ReviewSessionTracker();
+		await expect(tracker.awaitPendingMint("issue-1")).resolves.toBeUndefined();
+		await expect(tracker.awaitPendingMint(undefined)).resolves.toBeUndefined();
+	});
+
+	it("waits for the mint to bind a session id, then lets the caller see it", async () => {
+		const tracker = new ReviewSessionTracker();
+		tracker.beginReview(makeContext());
+
+		let settled = false;
+		const waiter = tracker.awaitPendingMint("issue-1").then(() => {
+			settled = true;
+		});
+
+		// Still in flight — the waiter must not have resolved yet.
+		await Promise.resolve();
+		expect(settled).toBe(false);
+
+		tracker.attachSessionId("issue-1", "review-session");
+		await waiter;
+
+		expect(settled).toBe(true);
+		expect(tracker.takeContext("review-session")).toBeDefined();
+	});
+
+	it("stops waiting when the review is abandoned", async () => {
+		const tracker = new ReviewSessionTracker();
+		tracker.beginReview(makeContext());
+
+		const waiter = tracker.awaitPendingMint("issue-1");
+		tracker.abandonReview("issue-1");
+
+		await expect(waiter).resolves.toBeUndefined();
+	});
+
+	it("gives up after mintWaitMs so a hung mint cannot stall other sessions", async () => {
+		const tracker = new ReviewSessionTracker({ mintWaitMs: 5 });
+		tracker.beginReview(makeContext());
+
+		// Never bound — resolves on the timeout rather than hanging.
+		await expect(tracker.awaitPendingMint("issue-1")).resolves.toBeUndefined();
 	});
 });

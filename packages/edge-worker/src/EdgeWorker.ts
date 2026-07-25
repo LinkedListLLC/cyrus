@@ -4004,9 +4004,10 @@ ${taskSection}`;
 	 * Start a read-only review if the issue moved into the repository's
 	 * configured `reviewOnStatus` state.
 	 *
-	 * Guarded three ways because Linear delivers at-least-once and users re-save
-	 * issues: webhook-key de-dup, a per-issue in-flight guard, and a check for an
-	 * existing review session on the issue.
+	 * Guarded twice because Linear delivers at-least-once and users re-save
+	 * issues: de-dup on the webhook key (catches a redelivery of the *same*
+	 * transition) and a per-issue in-flight guard (catches a genuinely new
+	 * transition arriving while a review is still running).
 	 */
 	private async maybeStartStatusReview(
 		webhook: IssueUpdateWebhook,
@@ -4066,10 +4067,17 @@ ${taskSection}`;
 	 * hand the review the builder's context and tools, which is a biased
 	 * self-review. Linear supports multiple agent sessions per issue.
 	 *
-	 * Minting emits an `AgentSessionCreated` webhook that re-enters the normal
-	 * session-start path, so this method does **not** start a runner itself —
-	 * doing both would double-start. The marker registered here is what makes
-	 * that webhook take the review branch.
+	 * The review is started **here**, directly from the mint result. Linear's
+	 * documentation describes `AgentSessionEvent`/`created` only for human
+	 * delegation and @mention, and says nothing about whether a session an app
+	 * creates for itself is echoed back to that app — so treating the echo as
+	 * the trigger would make the whole feature depend on undocumented behaviour,
+	 * failing silently (an empty session, a held guard, no review) if it never
+	 * arrives. Starting from the mint result removes that dependency.
+	 *
+	 * If the echo *does* arrive it is harmless: the marker claim is one-shot and
+	 * keyed by session id, so the webhook path finds the review already claimed
+	 * and drops the event instead of starting anything.
 	 */
 	private async startStatusReviewSession(
 		context: ReviewSessionContext,
@@ -4096,21 +4104,38 @@ ${taskSection}`;
 
 			if (!mintedSessionId) {
 				this.logger.error(
-					`Linear did not return an agent session id for review of ${context.issueIdentifier}`,
+					`Linear did not return an agent session id for review of ${context.issueIdentifier} — no review will run for this transition`,
 				);
 				this.reviewSessions.abandonReview(context.issueId);
 				return;
 			}
 
-			// Reconcile the issue-keyed marker to the session id. `false` means the
-			// webhook already claimed it and the review is starting — nothing to do.
+			// Bind the marker to the session Linear just gave us. `false` means the
+			// review was abandoned or its marker expired while the mint was in
+			// flight — starting a runner then would be starting an unclaimed one.
 			if (
-				this.reviewSessions.attachSessionId(context.issueId, mintedSessionId)
+				!this.reviewSessions.attachSessionId(context.issueId, mintedSessionId)
 			) {
-				this.logger.info(
-					`Minted review agent session ${mintedSessionId} for ${context.issueIdentifier}`,
+				this.logger.warn(
+					`Review marker for ${context.issueIdentifier} was gone by the time session ${mintedSessionId} was minted — not starting a review`,
 				);
+				return;
 			}
+
+			this.logger.info(
+				`Minted review agent session ${mintedSessionId} for ${context.issueIdentifier}`,
+			);
+
+			// One-shot claim, then start. If the echo somehow got here first this
+			// returns undefined and we leave the running review alone.
+			const claimed = this.reviewSessions.takeContext(mintedSessionId);
+			if (!claimed) return;
+
+			await this.initializeReviewRunner(
+				mintedSessionId,
+				claimed,
+				context.linearWorkspaceId,
+			);
 		} catch (error) {
 			this.logger.error(
 				`Failed to mint review agent session for ${context.issueIdentifier}:`,
@@ -4133,11 +4158,10 @@ ${taskSection}`;
 	 * runner/model selection cannot turn this back into a builder session.
 	 */
 	private async initializeReviewRunner(
-		agentSession: AgentSessionCreatedWebhook["agentSession"],
+		sessionId: string,
 		context: ReviewSessionContext,
 		linearWorkspaceId: string,
 	): Promise<void> {
-		const sessionId = agentSession.id;
 		const log = this.logger.withContext({
 			sessionId,
 			issueIdentifier: context.issueIdentifier,
@@ -4195,12 +4219,12 @@ ${taskSection}`;
 
 		if (worktree.usedFallbackRef) {
 			log.warn(
-				`Branch ${branchName} not found — reviewing ${worktree.checkoutRef} instead`,
+				`origin/${branchName} not found — reviewing ${worktree.checkoutRef} instead`,
 			);
 			await this.activityPoster.postThoughtActivity(
 				sessionId,
 				linearWorkspaceId,
-				`Could not find branch \`${branchName}\`; reviewing \`${worktree.checkoutRef}\` instead. The review may not reflect the pull request.`,
+				`Could not find \`origin/${branchName}\` (the pushed branch head); reviewing \`${worktree.checkoutRef}\` instead. **This may not be what the pull request contains** — the branch may have been merged, deleted, or never pushed.`,
 			);
 		}
 
@@ -4250,7 +4274,19 @@ ${taskSection}`;
 				...REVIEW_DISALLOWED_TOOLS,
 				...this.buildDisallowedTools(repository),
 			];
-			const allowedDirectories = [worktree.path];
+			// The review worktree alone is not enough. A detached linked worktree
+			// keeps its object store and refs in the *main* repository — `git-dir`
+			// resolves to `<repo>/.git/worktrees/<name>` and `git-common-dir` to
+			// `<repo>/.git` — so a sandbox allowed only `worktree.path` fails every
+			// `git diff`/`git log` the review depends on with "Operation not
+			// permitted". Mirrors what every other session path builds.
+			const allowedDirectories = [
+				...new Set([
+					worktree.path,
+					repository.repositoryPath,
+					...this.gitService.getGitMetadataDirectories(worktree.path),
+				]),
+			];
 			const reviewSystemPrompt = buildReviewSystemPrompt(promptContext);
 
 			// Mark the session so a follow-up comment resumes it as a review and
@@ -4305,6 +4341,15 @@ ${taskSection}`;
 			}
 		} catch (error) {
 			log.error(`Failed to start review session:`, error);
+			// Say so in the thread. A minted session that goes quiet is
+			// indistinguishable from a review that found nothing to say.
+			await this.activityPoster
+				.postThoughtActivity(
+					sessionId,
+					linearWorkspaceId,
+					`Could not start the read-only review: ${(error as Error).message}`,
+				)
+				.catch(() => {});
 			this.finishReviewSession(sessionId);
 		}
 	}
@@ -4639,14 +4684,30 @@ ${taskSection}`;
 		// none of those apply: the repository is already known, there is no human
 		// delegator to authorize, and a review of finished work is not blocked by
 		// dependencies.
-		if (webhook.agentSession?.id && webhook.agentSession.issue) {
-			const reviewContext = this.reviewSessions.takeContext(
-				webhook.agentSession.id,
-				issueId,
-			);
+		//
+		// The review is normally already running by now: it is started from the
+		// mint result rather than from this webhook, because Linear does not
+		// document whether app-created sessions are echoed back at all. This
+		// branch is the secondary path — it starts the review if the echo does
+		// arrive first, and drops the event if the review is already running.
+		if (webhook.agentSession?.id) {
+			const sessionId = webhook.agentSession.id;
+			// If a mint for this issue is still in flight, wait for it to bind a
+			// session id. Without this, an echo that overtakes the mint call would
+			// find no marker and be started as a builder.
+			await this.reviewSessions.awaitPendingMint(issueId);
+
+			if (this.reviewSessions.isReviewSession(sessionId)) {
+				this.logger.debug(
+					`Ignoring agentSessionCreated echo for review session ${sessionId} — already running`,
+				);
+				return;
+			}
+
+			const reviewContext = this.reviewSessions.takeContext(sessionId);
 			if (reviewContext) {
 				await this.initializeReviewRunner(
-					webhook.agentSession,
+					sessionId,
 					reviewContext,
 					webhook.organizationId,
 				);
@@ -4827,13 +4888,19 @@ ${taskSection}`;
 			return;
 		}
 
-		// Defensive net for `reviewOnStatus`: the marker is normally claimed in
-		// handleAgentSessionCreatedWebhook, but any other path that reaches here
-		// with a review session must not start a builder on it.
-		const reviewContext = this.reviewSessions.takeContext(sessionId, issue.id);
+		// Defensive net for `reviewOnStatus`: the marker is normally claimed when
+		// the mint returns, but any other path that reaches here with a review
+		// session must not start a builder on it.
+		if (this.reviewSessions.isReviewSession(sessionId)) {
+			this.logger.debug(
+				`Session ${sessionId} is an already-running review — not starting a builder on it`,
+			);
+			return;
+		}
+		const reviewContext = this.reviewSessions.takeContext(sessionId);
 		if (reviewContext) {
 			await this.initializeReviewRunner(
-				agentSession,
+				sessionId,
 				reviewContext,
 				linearWorkspaceId,
 			);
@@ -6910,6 +6977,10 @@ ${input.userComment}
 			labels,
 			issueDescription,
 			maxTurns,
+			// Derived from the session rather than plumbed through every caller:
+			// `initializeReviewRunner` stamps the flag before building the config,
+			// and it survives on the session for resumes.
+			readOnlySession: session.metadata?.readOnlyReview === true,
 			// Per-platform MCP config paths — GitHub + GitLab share the
 			// `githubMcpConfigs` knob (single-repo PR contexts both); Linear
 			// gets `linearMcpConfigs`. Not a blanket override: the builder
@@ -7666,13 +7737,14 @@ ${input.userComment}
 		// this, a follow-up comment ("can you just fix it?") would resume the
 		// review with the full builder toolset and a label-derived builder
 		// persona — the exact opposite of what the session was created to be.
-		if (session.metadata?.readOnlyReview) {
+		const isReadOnlyReview = session.metadata?.readOnlyReview === true;
+		if (isReadOnlyReview) {
 			allowedTools = [...REVIEW_ALLOWED_TOOLS];
 			disallowedTools = [
 				...REVIEW_DISALLOWED_TOOLS,
 				...this.buildDisallowedTools(repository),
 			];
-			systemPrompt = session.metadata.reviewSystemPrompt ?? systemPrompt;
+			systemPrompt = session.metadata?.reviewSystemPrompt ?? systemPrompt;
 			log.debug(
 				`Session ${sessionId} is a read-only review — keeping the review toolset on resume`,
 			);
@@ -7727,8 +7799,13 @@ ${input.userComment}
 				allowedDirectories,
 				disallowedTools,
 				resumeSessionId,
-				labels, // Always pass labels to preserve model override
-				fullIssue.description || undefined, // Description tags can override label selectors
+				// A read-only review passes neither, matching how it was first
+				// started. Both are issue-controlled text, and letting an
+				// `[agent=...]`/`[model=...]` tag or a persona label pick the
+				// runner on resume would let the issue body reshape a session
+				// whose whole contract is that it cannot be reshaped.
+				isReadOnlyReview ? undefined : labels, // Always pass labels to preserve model override
+				isReadOnlyReview ? undefined : fullIssue.description || undefined, // Description tags can override label selectors
 				maxTurns, // Pass maxTurns if specified
 				resolvedWorkspaceId,
 				this.buildSkillSessionContext(repository, fullIssue, session),

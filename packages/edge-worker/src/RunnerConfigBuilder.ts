@@ -158,6 +158,15 @@ export interface IssueRunnerConfigInput {
 	sandboxSettings?: SandboxSettings;
 	/** CA cert path for MITM TLS termination — passed via child process env */
 	egressCaCertPath?: string;
+	/**
+	 * This session never ships work, so the "you have unshipped work" Stop
+	 * guardrail must not be installed. Set for `reviewOnStatus` reviews, which
+	 * run in a **detached** worktree at the PR head: `git status` is clean but
+	 * `@{u}` does not resolve, so the guardrail falls back to `origin/HEAD` and
+	 * counts the PR's *own* commits as unpushed. It would then block the stop
+	 * and instruct a read-only reviewer to commit, push and open a PR.
+	 */
+	readOnlySession?: boolean;
 }
 
 export function resolveIssueMcpConfigPath(
@@ -308,10 +317,12 @@ export class RunnerConfigBuilder {
 
 		// Configure hooks: PostToolUse for screenshot tools + PR-marker enforcement,
 		// plus the Stop hook that blocks the session when work is unshipped.
+		// A read-only session has no work to ship, so it gets no Stop guardrail —
+		// see `readOnlySession`.
 		const screenshotHooks = this.buildScreenshotHooks(log);
 		const prMarkerHook = buildPrMarkerHook(log);
 		const intentToAddHook = buildIntentToAddHook(log);
-		const stopHook = this.buildStopHook(log);
+		const stopHook = input.readOnlySession ? {} : this.buildStopHook(log);
 		const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
 			...stopHook,
 			PostToolUse: [
