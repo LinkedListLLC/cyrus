@@ -316,6 +316,18 @@ export class EdgeWorker extends EventEmitter {
 	private reviewSessions = new ReviewSessionTracker();
 
 	/**
+	 * Whether an `Issue` entity webhook has ever been delivered to this process.
+	 *
+	 * The `reviewOnStatus` trigger is reachable *only* from that webhook type, and
+	 * Linear delivers it only if the OAuth app subscribes to the `Issue` resource
+	 * type. When it does not, the feature is silently dead — configured, tested,
+	 * deployed, and never invoked (CYR-33). These two flags turn that silence into
+	 * a log line.
+	 */
+	private sawIssueEntityWebhook = false;
+	private warnedReviewTriggerUnreachable = false;
+
+	/**
 	 * Detached review worktrees, keyed by review session id, so they can be
 	 * removed when the review finishes.
 	 */
@@ -719,6 +731,21 @@ export class EdgeWorker extends EventEmitter {
 
 		// Initialize and register components BEFORE starting server (routes must be registered before listen())
 		await this.initializeComponents();
+
+		// State the reviewOnStatus prerequisite up front, so "no review ever ran"
+		// is diagnosable from the logs alone rather than from a webhook capture.
+		const awaitingReview = this.repositoriesAwaitingReviewTrigger();
+		if (awaitingReview.length > 0) {
+			this.logger.info(
+				`🔍 reviewOnStatus enabled for ${awaitingReview
+					.map((repo) => `${repo.name} ("${repo.reviewOnStatus}")`)
+					.join(
+						", ",
+					)} — this requires the Linear OAuth app to be subscribed to ` +
+					`the "Issue" resource type. Watching for the first Issue/update webhook; ` +
+					`if none is logged, the trigger is unreachable (CYR-33).`,
+			);
+		}
 
 		// Refresh GitHub webhook allowlist from /meta API (non-blocking)
 		if (this.webhookIpValidator.isEnabled()) {
@@ -3177,6 +3204,73 @@ ${taskSection}`;
 	/**
 	 * Handle webhook events from proxy - main router for all webhooks
 	 */
+	/** Repositories that have opted into `reviewOnStatus`. */
+	private repositoriesAwaitingReviewTrigger(): RepositoryConfig[] {
+		return Array.from(this.repositories.values()).filter((repo) =>
+			Boolean(repo.reviewOnStatus?.trim()),
+		);
+	}
+
+	/**
+	 * Detect the one failure mode `reviewOnStatus` cannot detect itself: the
+	 * trigger's webhook never being delivered.
+	 *
+	 * `maybeStartStatusReview` has a single call site, reached from a single
+	 * router branch, which requires an `Issue`/`update` webhook. If the Linear
+	 * OAuth app is not subscribed to the `Issue` resource type, that webhook never
+	 * arrives and no review can ever start — with nothing logged, because a
+	 * webhook that is not delivered cannot be logged as missing. Every layer below
+	 * this looks healthy, which is exactly how CYR-33 shipped, deployed, and was
+	 * switched on without ever being able to fire.
+	 *
+	 * Two signals, both one-shot:
+	 * - the first `Issue` webhook confirms the channel is live;
+	 * - a status-change *notification* arriving while no `Issue` webhook ever has
+	 *   is the positive signature of the broken configuration — it proves Linear
+	 *   is talking to us about issue status, just not on the channel the review
+	 *   needs.
+	 */
+	private trackReviewTriggerReachability(
+		webhookType: string | undefined,
+		webhookAction: string | undefined,
+	): void {
+		if (webhookType === "Issue") {
+			if (!this.sawIssueEntityWebhook) {
+				this.sawIssueEntityWebhook = true;
+				this.logger.info(
+					"✅ Issue entity webhook received — the reviewOnStatus trigger is reachable on this deployment.",
+				);
+			}
+			return;
+		}
+
+		if (
+			this.sawIssueEntityWebhook ||
+			this.warnedReviewTriggerUnreachable ||
+			webhookType !== "AppUserNotification" ||
+			webhookAction !== "issueStatusChanged"
+		) {
+			return;
+		}
+
+		const waiting = this.repositoriesAwaitingReviewTrigger();
+		if (waiting.length === 0) return;
+
+		this.warnedReviewTriggerUnreachable = true;
+		this.logger.warn(
+			`reviewOnStatus is configured for ${waiting
+				.map((repo) => repo.name)
+				.join(
+					", ",
+				)}, but no "Issue" entity webhook has been delivered to this ` +
+				`process — only AppUserNotification/issueStatusChanged, which Linear sends ` +
+				`solely for terminal transitions and which cannot start a review. ` +
+				`Reviews will never fire until the Linear OAuth app is subscribed to the ` +
+				`"Issue" resource type (Linear → Settings → API → your app → Webhooks). ` +
+				`See docs/REVIEW_ON_STATUS.md § Prerequisite.`,
+		);
+	}
+
 	private async handleWebhook(
 		webhook: Webhook,
 		repos: RepositoryConfig[],
@@ -3192,6 +3286,8 @@ ${taskSection}`;
 			type: webhookType,
 			repoCount: repos.length,
 		});
+
+		this.trackReviewTriggerReachability(webhookType, webhookAction);
 
 		// Log verbose webhook info if enabled
 		if (process.env.CYRUS_WEBHOOK_DEBUG === "true") {
