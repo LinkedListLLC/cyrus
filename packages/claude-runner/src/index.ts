@@ -11,6 +11,7 @@ export type {
 } from "@anthropic-ai/claude-agent-sdk";
 export {
 	type DeriveBuiltInToolsOptions,
+	deriveBuiltInDisallowedTools,
 	deriveBuiltInTools,
 	KNOWN_BUILT_IN_TOOLS,
 	MUTATING_BUILT_IN_TOOLS,
