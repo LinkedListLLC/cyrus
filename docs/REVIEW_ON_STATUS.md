@@ -42,6 +42,52 @@ spreads the new object into the live map. No `ConfigManager` change is needed (u
 
 ---
 
+## Prerequisite: the Linear app must receive `Issue` webhooks
+
+**Setting `reviewOnStatus` is not sufficient.** The trigger is reachable from exactly one webhook
+type — `Issue` / `update` — and Linear only delivers that if the OAuth app is subscribed to the
+**`Issue` resource type** (Linear → Settings → API → your application → Webhooks). Agent apps are
+commonly set up with only *Agent session events* and *Inbox notifications*, and with that
+configuration **no review can ever start**: the config is valid, the code is correct, and the
+router branch is simply never taken.
+
+This is not hypothetical. It is how the feature shipped: designed, reviewed against five blocking
+findings, merged, deployed and switched on, while being unable to fire (CYR-33). Every check was
+performed below the level of the defect — the break was outside the handler, in whether the webhook
+arrives at all.
+
+### Why the notification channel cannot be used instead
+
+Linear *does* deliver `AppUserNotification` / `issueStatusChanged` to agent apps without any extra
+subscription, which makes it a tempting substitute. It is not one, for two independent reasons:
+
+1. **It is terminal-only.** Measured over a 120-minute production window (2026-07-26): two terminal
+   transitions produced two notifications; five non-terminal transitions — one into "In Progress"
+   and four into "In Review" — produced **none**. A review triggers on a non-terminal state, so the
+   signal it needs never appears on this channel.
+2. **That channel already means something else.** `isIssueStateChangeWebhook` feeds the message bus
+   via `buildTerminalStateMessage`, which stamps `isTerminal: true` unconditionally;
+   `handleIssueStateChangeMessage` then stops the issue's sessions and deletes its worktrees.
+   Routing a non-terminal state through it would kill running sessions.
+
+### Confirming it works
+
+Two log lines make the difference visible without a webhook capture:
+
+- at startup, when any repository sets `reviewOnStatus`, Cyrus logs the state it is waiting for and
+  names this prerequisite;
+- the first `Issue` webhook logs `✅ Issue entity webhook received — the reviewOnStatus trigger is
+  reachable on this deployment.`
+
+If instead you see a warning that a status notification arrived while no `Issue` webhook ever has,
+the subscription is missing — that is the exact signature of the broken configuration.
+
+> **Note:** changing an OAuth application's webhook resource types may require re-authorizing the
+> app for already-connected workspaces (`cyrus self-auth-linear`) before delivery begins. Confirm
+> in Linear's own settings rather than assuming; this side cannot inspect them.
+
+---
+
 ## How it works
 
 1. **Trigger.** Linear sends an `Issue` / `update` webhook whose `updatedFrom` contains `stateId`.
@@ -164,6 +210,15 @@ spreads the new object into the live map. No `ConfigManager` change is needed (u
 - `RunnerConfigBuilder.review-stop-hook.test.ts` — against a real detached worktree at a PR head,
   the ship guardrail *would* block the review and order it to commit and push; a read-only session
   gets no Stop hook, while builder sessions still do.
+- `EdgeWorker.review-trigger-reachability.test.ts` — **the only test that drives the real router.**
+  Every test above calls `handleIssueStateChange` directly, which verifies the feature from the
+  handler inward and is precisely why an unreachable trigger survived them all. This one feeds
+  `handleWebhook` the exact `type`/`action` pairs production delivers and pins the reachable set to
+  a single shape (`Issue`/`update` with `updatedFrom.stateId`) — `issueStatusChanged`,
+  `issueAssignedToYou`, `issueSubscribed`, `issueNewComment`, `AgentSessionEvent`/`created`, a
+  title-only update and `Issue`/`remove` all reach nothing. It also covers the unreachable-trigger
+  warning: fires once, only when a repository opted in, and never after an `Issue` webhook has
+  proved the channel live.
 
 ## Verified vs assumed
 

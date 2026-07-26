@@ -823,6 +823,20 @@ export type IssueUpdateWebhook =
  * Linear sends this as an AppUserNotification when an issue transitions to a
  * terminal state (completed or canceled). The notification contains the issue
  * data via `notification.issue`.
+ *
+ * **This is terminal-only, and the whole message-bus path depends on that.**
+ * `LinearMessageTranslator.buildTerminalStateMessage` stamps `isTerminal: true`
+ * unconditionally, and `EdgeWorker.handleIssueStateChangeMessage` then stops the
+ * issue's sessions and deletes its worktrees. A non-terminal notification on this
+ * channel would therefore kill a running session. Measured in production
+ * (2026-07-26, CYR-33): over one 120-minute window, five non-terminal transitions
+ * produced **zero** notifications and two terminal transitions produced **two** —
+ * so do not widen this channel to non-terminal states without also removing that
+ * hardcoded `isTerminal`.
+ *
+ * Corollary: this channel **cannot** carry a `reviewOnStatus` trigger, which fires
+ * on a non-terminal state such as "In Review". That trigger is reachable only via
+ * the `Issue`/`update` entity webhook — see {@link isIssueStateIdUpdateWebhook}.
  */
 export type IssueStateChangeWebhook =
 	LinearSDK.LinearDocument.AppUserNotificationWebhookPayload;
@@ -976,6 +990,17 @@ export function isIssueStateIdUpdateWebhook(
  *
  * Linear sends AppUserNotification webhooks with action "issueStatusChanged"
  * when an issue transitions to a terminal state (completed or canceled).
+ *
+ * Confirmed in production (2026-07-26, CYR-33) rather than assumed: across a
+ * 120-minute window, every `issueStatusChanged` notification received was a
+ * terminal transition (2 of 2), and every non-terminal transition produced none
+ * (0 of 5, spanning "In Progress" and four moves into "In Review").
+ *
+ * **Do not route a non-terminal feature through this guard.** It is the entry
+ * point to the unconditionally-terminal message-bus path — see
+ * {@link IssueStateChangeWebhook} for what that path does. `reviewOnStatus`
+ * triggers on a non-terminal state and is reachable only via
+ * {@link isIssueStateIdUpdateWebhook}.
  */
 export function isIssueStateChangeWebhook(
 	webhook: Webhook,
