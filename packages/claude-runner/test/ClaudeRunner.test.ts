@@ -138,6 +138,9 @@ describe("ClaudeRunner", () => {
 					// Internal pending-work recorder Stop hook is always registered
 					// (CYPACK-1310)
 					hooks: { Stop: [expect.objectContaining({ matcher: ".*" })] },
+					// The permission callback is always installed: it is the only
+					// place scoped `Bash(...)` grants are enforced (CYR-20).
+					canUseTool: expect.any(Function),
 				},
 			});
 		});
@@ -177,6 +180,9 @@ describe("ClaudeRunner", () => {
 					// Internal pending-work recorder Stop hook is always registered
 					// (CYPACK-1310)
 					hooks: { Stop: [expect.objectContaining({ matcher: ".*" })] },
+					// The permission callback is always installed: it is the only
+					// place scoped `Bash(...)` grants are enforced (CYR-20).
+					canUseTool: expect.any(Function),
 				},
 			});
 		});
@@ -216,6 +222,9 @@ describe("ClaudeRunner", () => {
 					// Internal pending-work recorder Stop hook is always registered
 					// (CYPACK-1310)
 					hooks: { Stop: [expect.objectContaining({ matcher: ".*" })] },
+					// The permission callback is always installed: it is the only
+					// place scoped `Bash(...)` grants are enforced (CYR-20).
+					canUseTool: expect.any(Function),
 				},
 			});
 		});

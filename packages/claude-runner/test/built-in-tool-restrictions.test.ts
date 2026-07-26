@@ -63,18 +63,35 @@ describe("deriveBuiltInTools", () => {
 		expect(dropped).toEqual(["NotARealTool"]);
 	});
 
-	// Fail-closed rule 2 — the crux of CYR-15. `Bash(git -C * pull)` reads as a
-	// narrow grant, but allowedTools patterns only auto-approve and never deny,
-	// so granting Bash at all would hand a read-only persona an arbitrary shell.
+	// Fail-closed rule 2 — the crux of CYR-15. A narrowed grant on a mutating
+	// tool is a promise `allowedTools` cannot keep, since its patterns only
+	// auto-approve and never deny, so the tool is withheld rather than handed
+	// over unscoped.
 	it("withholds a mutating tool that is only granted with a narrowing argument", () => {
+		const dropped: Array<[string, string]> = [];
+		const result = deriveBuiltInTools(["Read", "Edit(src/**)"], {
+			onDropped: (entry, reason) => dropped.push([entry, reason]),
+		});
+
+		expect(result).not.toContain("Edit");
+		expect(dropped[0]?.[0]).toBe("Edit(src/**)");
+		expect(dropped[0]?.[1]).toMatch(/cannot be enforced/);
+	});
+
+	// CYR-20 carved `Bash` out of that rule: it is the one mutating tool whose
+	// narrowing Cyrus can actually honour, in `ClaudeRunner`'s canUseTool
+	// callback. Withholding it instead meant a review persona whose entire
+	// allow-list is `Bash(git diff:*)`-shaped had no shell at all — and reviewed
+	// the code with no idea what had changed. The enforcement that makes this
+	// safe is exercised in `scoped-bash-enforcement.test.ts`.
+	it("grants Bash for a narrowed grant, because canUseTool enforces the narrowing", () => {
 		const dropped: Array<[string, string]> = [];
 		const result = deriveBuiltInTools(["Read", "Bash(git -C * pull)"], {
 			onDropped: (entry, reason) => dropped.push([entry, reason]),
 		});
 
-		expect(result).not.toContain("Bash");
-		expect(dropped[0]?.[0]).toBe("Bash(git -C * pull)");
-		expect(dropped[0]?.[1]).toMatch(/cannot be enforced/);
+		expect(result).toContain("Bash");
+		expect(dropped).toEqual([]);
 	});
 
 	it("still grants a mutating tool when the grant is unrestricted", () => {
@@ -163,8 +180,47 @@ describe("ClaudeRunner - readOnly sessions cannot write (CYR-15)", () => {
 		});
 
 		expect(options.tools).toBeDefined();
-		for (const tool of MUTATING) {
+		for (const tool of MUTATING.filter((t) => t !== "Bash")) {
 			expect(options.tools).not.toContain(tool);
+		}
+	});
+
+	// The Slack preset's only shell grant is `Bash(git -C * pull)`. Since CYR-20
+	// that grant is honoured rather than dropped, so `Bash` is in context — but
+	// it is confined to the command the grant names. Asserting the tool is
+	// absent would no longer be true; asserting the *confinement* is the
+	// property that actually keeps the session read-only.
+	it("confines a readOnly session's shell to the command its grant names", async () => {
+		const options = await captureQueryOptions({
+			workingDirectory: "/test",
+			cyrusHome: "/test/cyrus",
+			allowedTools: [...SLACK_DEFAULT_ALLOWED_TOOLS],
+		});
+
+		expect(options.tools).toContain("Bash");
+		// Not auto-approved by the SDK — every call reaches the callback.
+		expect(
+			(options.allowedTools ?? []).filter((t: string) => /^Bash(\(|$)/.test(t)),
+		).toEqual([]);
+
+		const decide = (command: string) =>
+			options.canUseTool(
+				"Bash",
+				{ command },
+				{ signal: new AbortController().signal, toolUseID: "t" },
+			);
+
+		await expect(decide("git -C /repo pull")).resolves.toMatchObject({
+			behavior: "allow",
+		});
+		for (const command of [
+			"rm -rf /repo",
+			"git push origin main",
+			"git -C /repo pull && rm -rf /repo",
+		]) {
+			await expect(decide(command)).resolves.toMatchObject({
+				behavior: "deny",
+			});
 		}
 	});
 
