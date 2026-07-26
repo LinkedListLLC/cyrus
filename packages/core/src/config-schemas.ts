@@ -345,10 +345,17 @@ export const RepositoryConfigSchema = z.object({
 	 *
 	 * Requires `reviewOnStatus` to be set; it names the state that counts.
 	 *
-	 * ⚠️ While enabled, delegating an issue that is in that state means "review
-	 * this", not "build this" — the two are indistinguishable at the webhook, so
-	 * you cannot delegate build work on an issue parked in the review state.
-	 * Unset (the default) leaves delegation behaviour completely unchanged.
+	 * **Trigger it with an @mention.** Any *new* agent session on the issue
+	 * reaches this branch, and a first-time delegation creates one — but the
+	 * common case for a review is an issue Cyrus itself just built, where it is
+	 * already the delegate. Verified in production (CYR-34): un-delegating and
+	 * re-delegating such an issue started no new session and therefore no
+	 * review, while an @mention started one 74 seconds later.
+	 *
+	 * ⚠️ While enabled, asking Cyrus to work an issue in that state means
+	 * "review this", not "build this" — the two are indistinguishable at the
+	 * webhook, so you cannot send build work to an issue parked in the review
+	 * state. Unset (the default) leaves this behaviour completely unchanged.
 	 */
 	reviewOnDelegateInStatus: z.boolean().optional(),
 });
