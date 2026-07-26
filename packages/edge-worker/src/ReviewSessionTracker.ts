@@ -286,6 +286,24 @@ export class ReviewSessionTracker {
 	}
 
 	/**
+	 * Adopt a session Linear has *already* created as a review.
+	 *
+	 * The status trigger has to mint its own session, which is why it needs the
+	 * {@link beginReview} → {@link attachSessionId} → {@link takeContext} dance:
+	 * the session id does not exist when the review is decided on. A
+	 * delegation-triggered review (`reviewOnDelegateInStatus`) has the opposite
+	 * shape — Linear created the session *before* telling us, so the id is known
+	 * up front and there is no mint to race.
+	 *
+	 * This records the claim directly and deliberately leaves the per-issue
+	 * pending/active state untouched, so a concurrent status-triggered mint on
+	 * the same issue is neither clobbered nor stranded on a settled promise.
+	 */
+	adoptReviewSession(sessionId: string): void {
+		this.rememberClaimed(sessionId);
+	}
+
+	/**
 	 * Has this session id already been claimed as a review?
 	 *
 	 * Lets a duplicate or late `AgentSessionCreated` for a review we already

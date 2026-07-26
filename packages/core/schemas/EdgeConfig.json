@@ -478,6 +478,9 @@
 					},
 					"reviewOnStatus": {
 						"type": "string"
+					},
+					"reviewOnDelegateInStatus": {
+						"type": "boolean"
 					}
 				},
 				"required": [

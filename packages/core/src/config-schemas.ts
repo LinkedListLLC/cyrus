@@ -331,6 +331,26 @@ export const RepositoryConfigSchema = z.object({
 	 * Unset (the default) disables the feature for this repository.
 	 */
 	reviewOnStatus: z.string().optional(),
+
+	/**
+	 * Also start a review when the agent is **delegated** an issue that is
+	 * already sitting in the `reviewOnStatus` state.
+	 *
+	 * Exists because the `Issue`/`update` webhook that normally triggers
+	 * `reviewOnStatus` is delivered only if the Linear application subscribes to
+	 * the `Issue` resource type — a subscription agent apps often lack, which
+	 * makes the status trigger silently unreachable (CYR-33). The
+	 * `AgentSessionEvent`/`created` webhook this reacts to is always delivered,
+	 * so it works with no change to the Linear app's configuration.
+	 *
+	 * Requires `reviewOnStatus` to be set; it names the state that counts.
+	 *
+	 * ⚠️ While enabled, delegating an issue that is in that state means "review
+	 * this", not "build this" — the two are indistinguishable at the webhook, so
+	 * you cannot delegate build work on an issue parked in the review state.
+	 * Unset (the default) leaves delegation behaviour completely unchanged.
+	 */
+	reviewOnDelegateInStatus: z.boolean().optional(),
 });
 
 /**
