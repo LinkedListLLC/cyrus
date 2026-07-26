@@ -292,13 +292,27 @@ export const REVIEW_DISALLOWED_TOOLS = [
  * A narrowed `Bash(...)` *allow* grant is a floor, not a ceiling. Measured on
  * the real SDK (`@anthropic-ai/claude-agent-sdk@0.3.205`, CYR-25): a session
  * whose only shell grant was `Bash(git -C * pull)` ran `git status` anyway,
- * and Cyrus's `canUseTool` callback was never consulted. The reason is
- * `sandbox.autoAllowBashIfSandboxed` — Cyrus enables the SDK sandbox, and the
- * SDK then auto-approves commands its own read-only classifier recognises
- * (`git status`, `git log`, `ls`, `echo`) *before* the callback runs.
+ * and Cyrus's `canUseTool` callback was never consulted. The cause is a
+ * **read-only command classifier inside Claude Code itself**, which
+ * pre-approves commands it recognises as non-mutating (`git status`, `git log`,
+ * `ls`, `echo`) *before* the callback runs.
  *
- * `disallowedTools` is the layer that survives that. Deny rules are evaluated
- * ahead of the sandbox auto-allow exemption *and* ahead of `canUseTool`, so a
+ * It is **not** `sandbox.autoAllowBashIfSandboxed`, and it is not configurable
+ * from Cyrus. Measured across three configurations (CYR-25 review), asking for
+ * `git status` with a `canUseTool` that denies everything:
+ *
+ * | sandbox config                          | callback fired | command allowed |
+ * |-----------------------------------------|----------------|-----------------|
+ * | `enabled: true`, flag omitted (prod)    | no             | **yes**         |
+ * | `enabled: true`, flag explicitly `true` | no             | **yes**         |
+ * | no `sandbox` key at all                 | no             | **yes**         |
+ *
+ * The last row is the one that matters: the pre-approval happens with the
+ * sandbox entirely absent, so disabling or reconfiguring the sandbox does not
+ * tighten it. Do not reason about this as a sandbox exemption.
+ *
+ * `disallowedTools` is the layer that survives it. Deny rules are evaluated
+ * ahead of the read-only pre-approval *and* ahead of `canUseTool`, so a
  * denied command is refused no matter which layer would otherwise wave it
  * through — including allow rules in a settings file, which the SDK warns can
  * shadow the callback invisibly. Verified in the same measurement: adding

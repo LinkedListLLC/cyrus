@@ -34,11 +34,13 @@ vi.mock("fs", () => ({
  * model's context — neither can refuse a call. Two layers above them can wave a
  * command through before Cyrus is ever consulted:
  *
- *   1. `sandbox.autoAllowBashIfSandboxed`. Cyrus enables the SDK sandbox, and
- *      the SDK then auto-approves commands its own read-only classifier
- *      recognises. Measured against the real SDK (0.3.205): a session whose
- *      only shell grant was `Bash(git -C * pull)` ran `git status` and
- *      `canUseTool` was never called.
+ *   1. Claude Code's **own read-only command classifier**, which pre-approves
+ *      commands it considers non-mutating. Measured against the real SDK
+ *      (0.3.205): a session whose only shell grant was `Bash(git -C * pull)`
+ *      ran `git status` and `canUseTool` was never called. This is **not**
+ *      `sandbox.autoAllowBashIfSandboxed` — it fires with no `sandbox` key
+ *      configured at all (see `live-sdk-precedence.test.ts`), so it cannot be
+ *      switched off from Cyrus.
  *   2. `permissions.allow` rules in a settings file, which the SDK warns can
  *      shadow `canUseTool` invisibly (`CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`).
  *
