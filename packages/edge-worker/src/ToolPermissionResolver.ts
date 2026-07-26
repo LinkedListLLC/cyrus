@@ -128,9 +128,12 @@ export class ToolPermissionResolver {
 			: [repositories];
 
 		if (repoArray.length === 0) {
-			const baseTools = this.config.linearAllowedTools ?? [
-				...LINEAR_DEFAULT_ALLOWED_TOOLS,
-			];
+			// Non-empty guard, same as step 4 of `buildAllowedToolsForRepo`:
+			// `??` only catches null/undefined, so a configured-but-empty list
+			// would pass straight through as an empty allow-list.
+			const baseTools = this.config.linearAllowedTools?.length
+				? this.config.linearAllowedTools
+				: [...LINEAR_DEFAULT_ALLOWED_TOOLS];
 			return [...new Set(baseTools)];
 		}
 
@@ -210,14 +213,26 @@ export class ToolPermissionResolver {
 		}
 		// 3. Repository-level allowed tools (verbatim — no platform-default
 		//    merging; if the operator narrows the list, they get the narrow
-		//    list).
+		//    list). Preset *strings* are still expanded: `resolveToolPreset`
+		//    returns an array unchanged, so this stays verbatim for arrays
+		//    while `"all"` / `"safe"` / `"readOnly"` / `"coordinator"` mean the
+		//    same thing here as they do at steps 1-2. Without this, a preset
+		//    string would be taken as one literal tool name and silently
+		//    derive to zero built-in tools.
 		if (repository.allowedTools) {
-			return repository.allowedTools;
+			return this.resolveToolPreset(repository.allowedTools);
 		}
 		// 4. Workspace default allowed tools (the platform default the
 		//    surrounding `buildAllowedTools` / `buildGithubAllowedTools`
 		//    swapped in, if any).
-		if (this.config.linearAllowedTools) {
+		//
+		//    Guarded on non-empty: an empty array is truthy, so an unguarded
+		//    check would return `[]` and make step 5 unreachable, handing the
+		//    session an empty allow-list (and, since `tools` derives from
+		//    `allowedTools`, no tools at all). "Configured to nothing" is not
+		//    a state any caller means to express — it is what an absent
+		//    setting used to collapse into.
+		if (this.config.linearAllowedTools?.length) {
 			return this.config.linearAllowedTools;
 		}
 		// 5. Final fallback — Linear platform default.
