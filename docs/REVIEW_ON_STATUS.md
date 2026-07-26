@@ -86,6 +86,43 @@ the subscription is missing — that is the exact signature of the broken config
 > app for already-connected workspaces (`cyrus self-auth-linear`) before delivery begins. Confirm
 > in Linear's own settings rather than assuming; this side cannot inspect them.
 
+### Alternative: trigger by delegation (`reviewOnDelegateInStatus`)
+
+If you cannot or do not want to change the app's webhook subscription, there is a second route that
+needs nothing from Linear's settings — because it rides a webhook that is **always** delivered,
+`AgentSessionEvent`/`created`.
+
+```json
+{
+  "reviewOnStatus": "In Review",
+  "reviewOnDelegateInStatus": true
+}
+```
+
+With this set, **delegating the issue to Cyrus while it sits in the `reviewOnStatus` state** starts
+the read-only review instead of a builder session. It is opt-in and **off by default**: unset,
+delegation behaves exactly as it always has.
+
+It is in some ways the *simpler* of the two triggers. Linear has already created the agent session
+before notifying us, so the fresh session id the review depends on is the one we were handed —
+nothing is minted, which removes the mint/echo race the status trigger has to defend against
+(`awaitPendingMint`, one-shot markers, the 10s bound). All three isolation properties are
+unchanged: a session id the builder never used, a detached worktree at the PR head, and the
+read-only tool set. It also works for issues Cyrus never built, since routing is by team key rather
+than by `resolveRepositoryForIssue`.
+
+**Trade-offs, both real:**
+
+- It costs an extra action. Moving to "In Review" no longer suffices on its own — you move *and*
+  delegate. It is a manual trigger wearing an automatic one's clothes.
+- **While enabled, delegating an issue in that state always means "review this", never "build
+  this."** The two are indistinguishable at the webhook. If you delegate follow-up build work on an
+  issue parked in the review state, leave this off and subscribe to `Issue` webhooks instead.
+
+A terminal state that happens to match is refused with a warning rather than reviewed — the issue's
+sessions and worktrees are torn down there, so a review would race its own cleanup. If the state
+cannot be resolved, the delegation falls through to a normal session rather than guessing.
+
 ---
 
 ## How it works
@@ -219,6 +256,13 @@ the subscription is missing — that is the exact signature of the broken config
   title-only update and `Issue`/`remove` all reach nothing. It also covers the unreachable-trigger
   warning: fires once, only when a repository opted in, and never after an `Issue` webhook has
   proved the channel live.
+- `EdgeWorker.review-on-delegate.test.ts` — `reviewOnDelegateInStatus`, driven through
+  `handleAgentSessionCreatedWebhook`. The load-bearing case is the **negative** one: with the flag
+  unset or `false`, a delegation in the review state still starts a normal session, so the default
+  is provably unchanged. Enabled, it reviews on the delegated session id and **mints nothing**;
+  matches the state case-insensitively; marks the session so a duplicate echo is dropped; and
+  declines — falling through to a normal session — for a non-matching state, an unset
+  `reviewOnStatus`, a terminal state that happens to match, and an unresolvable state.
 
 ## Verified vs assumed
 

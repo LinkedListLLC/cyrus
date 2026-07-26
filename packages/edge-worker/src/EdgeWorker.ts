@@ -4769,6 +4769,91 @@ ${taskSection}`;
 	 * @param webhook The agent session created webhook
 	 * @param repos All available repositories for routing
 	 */
+	/**
+	 * Start a read-only review when the agent is *delegated* an issue that is
+	 * already in the repository's `reviewOnStatus` state.
+	 *
+	 * A second, opt-in route to the same review, added because the first one can
+	 * be structurally unreachable: the `Issue`/`update` webhook that drives
+	 * `reviewOnStatus` is delivered only if the Linear application subscribes to
+	 * the `Issue` resource type (CYR-33). `AgentSessionEvent`/`created` is always
+	 * delivered, so this route needs nothing from the Linear app's config.
+	 *
+	 * It is also the simpler of the two: Linear has *already* created the agent
+	 * session, so the fresh session id the review depends on is the one we were
+	 * just handed. Nothing is minted, which removes the mint/echo race the status
+	 * trigger has to defend against. Every isolation property is preserved — a
+	 * session id the builder never used, a detached worktree at the PR head, and
+	 * the read-only tool set.
+	 *
+	 * Returns `true` when a review was started and the caller must stop.
+	 */
+	private async maybeStartDelegatedReview(
+		webhook: AgentSessionCreatedWebhook,
+		repository: RepositoryConfig,
+		linearWorkspaceId: string,
+	): Promise<boolean> {
+		if (repository.reviewOnDelegateInStatus !== true) return false;
+		if (!repository.reviewOnStatus?.trim()) return false;
+
+		const sessionId = webhook.agentSession?.id;
+		const issue = webhook.agentSession?.issue;
+		if (!sessionId || !issue?.id) return false;
+
+		const issueId = issue.id;
+		const issueIdentifier = issue.identifier || issueId;
+
+		const issueTracker = this.issueTrackers.get(linearWorkspaceId);
+		if (!issueTracker) return false;
+
+		// The webhook's issue payload is not a reliable source for the *current*
+		// workflow state, so resolve it the same way the status trigger does.
+		let stateName: string | undefined;
+		let stateType: string | undefined;
+		try {
+			const fullIssue = await issueTracker.fetchIssue(issueId);
+			const state = await fullIssue.state;
+			stateName = state?.name;
+			stateType = state?.type;
+		} catch {
+			// Can't resolve the state — fall through and treat this as a normal
+			// delegation rather than guessing.
+			return false;
+		}
+
+		if (!matchesReviewStatus(repository.reviewOnStatus, stateName))
+			return false;
+
+		// A terminal state tears down the issue's sessions and worktrees, so a
+		// review started there would be racing its own cleanup.
+		if (stateType === "completed" || stateType === "canceled") {
+			this.logger.warn(
+				`${issueIdentifier} was delegated in "${stateName}", which matches reviewOnStatus for ${repository.name}, but it is a ${stateType} state — starting a normal session instead of a review.`,
+			);
+			return false;
+		}
+
+		this.logger.info(
+			`${issueIdentifier} was delegated while in "${stateName}" — starting a read-only review for ${repository.name} on the delegated session (reviewOnDelegateInStatus).`,
+		);
+
+		const context: ReviewSessionContext = {
+			issueId,
+			issueIdentifier,
+			repositoryId: repository.id,
+			linearWorkspaceId,
+			stateName: stateName as string,
+		};
+
+		// Deliberately not gated on `hasReviewInFlight`: that guard exists to
+		// absorb *redelivered webhooks* for one transition, whereas a delegation
+		// is an explicit human act each time. Sessions and their worktrees are
+		// keyed by session id, so a second review cannot collide with the first.
+		this.reviewSessions.adoptReviewSession(sessionId);
+		await this.initializeReviewRunner(sessionId, context, linearWorkspaceId);
+		return true;
+	}
+
 	private async handleAgentSessionCreatedWebhook(
 		webhook: AgentSessionCreatedWebhook,
 		repos: RepositoryConfig[],
@@ -4903,6 +4988,22 @@ ${taskSection}`;
 			issueIdentifier: webhook.agentSession.issue.identifier,
 		});
 		log.info(`Handling agent session created`);
+
+		// `reviewOnDelegateInStatus`: delegating an issue that already sits in the
+		// review state means "review this", not "build this". This runs after
+		// access control (a blocked delegator must not get a review either) and
+		// before the blocked-by park, which does not apply to reviewing finished
+		// work.
+		if (
+			await this.maybeStartDelegatedReview(
+				webhook,
+				primaryRepo,
+				linearWorkspaceId,
+			)
+		) {
+			return;
+		}
+
 		const { agentSession, guidance } = webhook;
 		const commentBody = agentSession.comment?.body;
 

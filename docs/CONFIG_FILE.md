@@ -80,6 +80,18 @@ The review session is read-only by construction: it can read code and run read-o
 
 Omit this field to disable automatic reviews for the repository (the default). See [REVIEW_ON_STATUS.md](REVIEW_ON_STATUS.md) for details.
 
+⚠️ **This trigger requires the Linear application to be subscribed to the `Issue` resource type.** Linear only sends the `Issue`/`update` webhook it fires on if that subscription exists; without it the setting is valid, the code is correct, and no review can ever start. See [REVIEW_ON_STATUS.md § Prerequisite](REVIEW_ON_STATUS.md).
+
+### `reviewOnDelegateInStatus` (boolean)
+
+Also start a review when the agent is **delegated** an issue that is already sitting in the `reviewOnStatus` state. Requires `reviewOnStatus` to be set — it names the state that counts.
+
+This exists as a second route to the same review for deployments that cannot subscribe to `Issue` webhooks: it reacts to `AgentSessionEvent`/`created`, which is always delivered. Because Linear creates the agent session before notifying us, nothing is minted — the review runs on the session you were just handed.
+
+Example: `true` — with `reviewOnStatus: "In Review"`, delegating an issue that is in "In Review" starts a read-only review instead of a builder session.
+
+⚠️ While enabled, delegating an issue in that state means "review this", not "build this" — the two are indistinguishable at the webhook. Omit this field (the default) to leave delegation behaviour completely unchanged.
+
 ---
 
 ## Routing Priority Order
