@@ -29,17 +29,27 @@ import { deriveBuiltInDisallowedTools } from "../src/built-in-tool-restrictions"
  *
  * ## What was measured (2026-07-26, @anthropic-ai/claude-agent-sdk@0.3.205)
  *
- * | run       | config                                    | `git status` | canUseTool fired |
- * |-----------|-------------------------------------------|--------------|------------------|
- * | control   | no deny rules                             | **allowed**  | no               |
- * | treatment | + `Bash(git status:*)` in disallowedTools | **denied**   | no               |
+ * | run             | config                                    | `git status` | canUseTool fired |
+ * |-----------------|-------------------------------------------|--------------|------------------|
+ * | control         | sandboxed, no deny rules                  | **allowed**  | no               |
+ * | control (no sb) | **no `sandbox` key at all**, no deny rules| **allowed**  | no               |
+ * | treatment       | + `Bash(git status:*)` in disallowedTools | **denied**   | no               |
  *
  * The control reproduces the production behaviour seen live on CYR-23/CYR-27:
  * a session whose only shell grant is `Bash(git -C * pull)` runs `git status`
- * anyway. The cause is `sandbox.autoAllowBashIfSandboxed` — Cyrus enables the
- * SDK sandbox, and the SDK auto-approves commands its own read-only classifier
- * recognises *before* consulting `canUseTool`. It is NOT settings-file
- * shadowing, which was ruled out separately.
+ * anyway. The cause is a read-only command classifier **inside Claude Code**,
+ * which pre-approves commands it considers non-mutating before `canUseTool` is
+ * consulted. It is NOT settings-file shadowing (ruled out separately) and it is
+ * NOT `sandbox.autoAllowBashIfSandboxed`.
+ *
+ * ⚠️ The sandbox attribution was this PR's original explanation and it was
+ * **wrong** — caught in review by adding the no-sandbox arm below. The first
+ * version of this file only tested the sandboxed configuration and credited the
+ * sandbox for an effect that occurs without it, which is a confounded control.
+ * Production never sets `autoAllowBashIfSandboxed` anyway (`EdgeWorker` sets
+ * only `{enabled, network}`), so an explanation that depended on the flag would
+ * not have applied to production at all. **Keep the no-sandbox arm**: it is the
+ * only case that discriminates between the two hypotheses.
  *
  * The treatment differs by one array entry and flips the outcome, with the
  * SDK's own rule-engine message. So: deny beats the pre-approval layer, and it
@@ -133,7 +143,7 @@ describe.runIf(LIVE)(
 			return { callbackFired, results };
 		}
 
-		it("control: the sandbox pre-approves git status before canUseTool is consulted", async () => {
+		it("control: git status is pre-approved before canUseTool is consulted", async () => {
 			const { callbackFired, results } = await runCommand({
 				command: "git status",
 				disallowedTools: [],
@@ -146,7 +156,23 @@ describe.runIf(LIVE)(
 			expect(callbackFired).toBe(false);
 		}, 180_000);
 
-		it("treatment: a deny rule refuses the very command the sandbox pre-approved", async () => {
+		it("control, unsandboxed: the pre-approval is NOT the sandbox", async () => {
+			const { callbackFired, results } = await runCommand({
+				command: "git status",
+				disallowedTools: [],
+				sandbox: false,
+			});
+
+			// The discriminating case. With no `sandbox` key at all, `git status` is
+			// still pre-approved and the callback is still never consulted — so the
+			// effect cannot be `sandbox.autoAllowBashIfSandboxed`, and disabling or
+			// reconfiguring the sandbox does not tighten it. Deleting this test
+			// makes the sandbox explanation look correct again.
+			expect(results.join("\n")).toContain("On branch");
+			expect(callbackFired).toBe(false);
+		}, 180_000);
+
+		it("treatment: a deny rule refuses the very command that was pre-approved", async () => {
 			const { results } = await runCommand({
 				command: "git status",
 				disallowedTools: ["Bash(git status:*)"],
@@ -174,8 +200,21 @@ describe.runIf(LIVE)(
 				sandbox: false,
 			});
 
-			expect(results.join("\n")).toContain("has been denied");
+			// Assert the DETERMINISTIC signal first: whatever the model chose to do,
+			// the file must be unchanged. The refusal *message* is a weaker signal —
+			// it only appears if the model actually attempted the command within
+			// maxTurns. On a review re-run it did not, so `results` came back empty
+			// and asserting on the message failed while the guarantee itself held.
+			// An empty transcript is indistinguishable from a successful deny, so the
+			// message must never be the primary assertion.
 			expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("hello\n");
+			const joined = results.join("\n");
+			// NB: do not assert the absence of "pwned" here — the refusal message
+			// echoes the denied command back, which contains `s/hello/pwned/`. The
+			// file read above is the assertion that the write did not land.
+			if (joined.length > 0) {
+				expect(joined).toContain("has been denied");
+			}
 		}, 180_000);
 
 		it("a deny rule outranks a permissive permissions.allow rule in a settings file", async () => {
@@ -198,8 +237,16 @@ describe.runIf(LIVE)(
 				sandbox: false,
 			});
 
-			expect(results.join("\n")).toContain("has been denied");
+			// Deterministic signal first, message conditionally — same reasoning as
+			// the chained-write test above.
 			expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("hello\n");
+			const joined = results.join("\n");
+			// NB: do not assert the absence of "pwned" here — the refusal message
+			// echoes the denied command back, which contains `s/hello/pwned/`. The
+			// file read above is the assertion that the write did not land.
+			if (joined.length > 0) {
+				expect(joined).toContain("has been denied");
+			}
 		}, 180_000);
 	},
 );

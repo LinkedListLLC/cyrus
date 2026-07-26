@@ -23,10 +23,12 @@ import { describe, expect, it } from "vitest";
  *
  * ## The divergence, and why it is not a security hole
  *
- * The cause is `sandbox.autoAllowBashIfSandboxed`. Cyrus enables the SDK
- * sandbox, and the SDK then auto-approves commands its own read-only
- * classifier recognises — `git status`, `git log`, `ls`, `echo` — *before*
- * `canUseTool` runs. Grok has no equivalent layer, so it refuses them.
+ * The cause is a read-only command classifier **inside Claude Code**, which
+ * pre-approves commands it considers non-mutating — `git status`, `git log`,
+ * `ls`, `echo` — *before* `canUseTool` runs. Grok has no equivalent layer, so
+ * it refuses them. It is **not** `sandbox.autoAllowBashIfSandboxed`: measured
+ * in review, the pre-approval fires with no `sandbox` key configured at all
+ * (see `claude-runner/test/live-sdk-precedence.test.ts`).
  *
  * That divergence is confined to **non-mutating** commands. It is real and it
  * is documented here rather than papered over, because it cannot be removed

@@ -255,10 +255,14 @@ function denyRuleCommand(rule: string): string | null {
  * other, because both are computed from `allowedTools` by the same rules.
  *
  * It matters that this is a second layer rather than a nicer `tools`. Measured
- * on the real SDK (CYR-25), `tools` and `canUseTool` are both bypassable —
- * `sandbox.autoAllowBashIfSandboxed` pre-approves read-only shell commands
- * before the callback runs, and settings-file allow rules can shadow it
- * invisibly. Deny rules are evaluated before both.
+ * on the real SDK (CYR-25), `tools` and `canUseTool` are both bypassable — a
+ * read-only command classifier **inside Claude Code** pre-approves commands it
+ * considers non-mutating before the callback runs, and settings-file allow
+ * rules can shadow it invisibly. Deny rules are evaluated before both.
+ *
+ * That pre-approval is **not** the sandbox: it fires with no `sandbox` key
+ * configured at all, so it cannot be turned off from Cyrus's side. See the
+ * measured table in `cyrus-core`'s `REVIEW_DISALLOWED_TOOLS` docs.
  *
  * ## Rules
  *

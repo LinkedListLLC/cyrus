@@ -647,12 +647,13 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 			// This is the layer that actually holds. `tools` and `canUseTool` are
 			// both bypassable — measured on the real SDK (CYR-25), a session whose
 			// only shell grant was `Bash(git -C * pull)` still ran `git status`
-			// without the callback ever being consulted, because Cyrus enables the
-			// SDK sandbox and `sandbox.autoAllowBashIfSandboxed` pre-approves
-			// commands the SDK's read-only classifier recognises. Deny rules are
-			// evaluated ahead of that exemption and ahead of the callback, so they
-			// hold where the other two do not. An unrestricted builder derives an
-			// empty list and stays unclamped.
+			// without the callback ever being consulted, because Claude Code
+			// pre-approves commands its own read-only classifier considers
+			// non-mutating. That happens with no `sandbox` key configured at all,
+			// so it is not a sandbox exemption and Cyrus cannot switch it off.
+			// Deny rules are evaluated ahead of it and ahead of the callback, so
+			// they hold where the other two do not. An unrestricted builder
+			// derives an empty list and stays unclamped.
 			const derivedDisallowedTools = deriveBuiltInDisallowedTools(
 				processedAllowedTools,
 			);
