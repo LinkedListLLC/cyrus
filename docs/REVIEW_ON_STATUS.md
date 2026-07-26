@@ -99,9 +99,30 @@ needs nothing from Linear's settings — because it rides a webhook that is **al
 }
 ```
 
-With this set, **delegating the issue to Cyrus while it sits in the `reviewOnStatus` state** starts
-the read-only review instead of a builder session. It is opt-in and **off by default**: unset,
-delegation behaves exactly as it always has.
+With this set, **any new agent session started on an issue that sits in the `reviewOnStatus` state**
+becomes the read-only review instead of a builder session. It is opt-in and **off by default**:
+unset, delegation and @mentions behave exactly as they always have.
+
+#### How to actually trigger it — @mention
+
+A new agent session is created by an @mention *or* by a first-time delegation, and either reaches
+this branch. But **the common case for a review is an issue Cyrus itself just built — and Cyrus is
+already the delegate of that issue**, so there is no "delegate" action left to perform.
+
+Confirmed in production (2026-07-26, CYR-34): un-delegating and immediately re-delegating such an
+issue posted *"I've been unassigned and am stopping work now"* and then started **nothing** — no new
+session, therefore no review. **@mentioning Cyrus started the review 74 seconds later**, and it
+correctly read the PR diff and posted a verdict.
+
+```
+1. Move the issue to "In Review".          (nothing happens — that is CYR-33)
+2. Comment:  @cyrus-william please review this.
+```
+
+*Stated precisely:* what was observed is that re-delegating an issue Cyrus already holds did not mint
+a session over the API. Whether Linear dedupes, or mints at most one session per issue and app, is
+not something this side can determine — so treat **@mention as the reliable trigger**, and a
+first-time delegation as the case that also happens to work.
 
 It is in some ways the *simpler* of the two triggers. Linear has already created the agent session
 before notifying us, so the fresh session id the review depends on is the one we were handed —
@@ -114,10 +135,10 @@ than by `resolveRepositoryForIssue`.
 **Trade-offs, both real:**
 
 - It costs an extra action. Moving to "In Review" no longer suffices on its own — you move *and*
-  delegate. It is a manual trigger wearing an automatic one's clothes.
-- **While enabled, delegating an issue in that state always means "review this", never "build
-  this."** The two are indistinguishable at the webhook. If you delegate follow-up build work on an
-  issue parked in the review state, leave this off and subscribe to `Issue` webhooks instead.
+  @mention. It is a manual trigger wearing an automatic one's clothes.
+- **While enabled, asking Cyrus to work an issue in that state always means "review this", never
+  "build this."** The two are indistinguishable at the webhook. If you send follow-up build work to
+  an issue parked in the review state, leave this off and subscribe to `Issue` webhooks instead.
 
 A terminal state that happens to match is refused with a warning rather than reviewed — the issue's
 sessions and worktrees are torn down there, so a review would race its own cleanup. If the state

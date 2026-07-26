@@ -88,9 +88,11 @@ Also start a review when the agent is **delegated** an issue that is already sit
 
 This exists as a second route to the same review for deployments that cannot subscribe to `Issue` webhooks: it reacts to `AgentSessionEvent`/`created`, which is always delivered. Because Linear creates the agent session before notifying us, nothing is minted — the review runs on the session you were just handed.
 
-Example: `true` — with `reviewOnStatus: "In Review"`, delegating an issue that is in "In Review" starts a read-only review instead of a builder session.
+Example: `true` — with `reviewOnStatus: "In Review"`, starting a new agent session on an issue that is in "In Review" gives a read-only review instead of a builder session.
 
-⚠️ While enabled, delegating an issue in that state means "review this", not "build this" — the two are indistinguishable at the webhook. Omit this field (the default) to leave delegation behaviour completely unchanged.
+**Trigger it with an @mention.** A first-time delegation also works, but the common case for a review is an issue Cyrus just built — where it is already the delegate, and re-delegating does not start a new session (verified in production, CYR-34). So: move the issue to the review state, then `@cyrus-... please review this`.
+
+⚠️ While enabled, asking Cyrus to work an issue in that state means "review this", not "build this" — the two are indistinguishable at the webhook. Omit this field (the default) to leave this behaviour completely unchanged.
 
 ---
 
