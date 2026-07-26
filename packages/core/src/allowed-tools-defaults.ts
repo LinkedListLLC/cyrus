@@ -284,6 +284,131 @@ export const REVIEW_DISALLOWED_TOOLS = [
 ] as const;
 
 /**
+ * Shell commands that mutate the workspace, the repository, or the world, in
+ * `Bash(...)` deny-rule form.
+ *
+ * ## Why a deny list is needed at all
+ *
+ * A narrowed `Bash(...)` *allow* grant is a floor, not a ceiling. Measured on
+ * the real SDK (`@anthropic-ai/claude-agent-sdk@0.3.205`, CYR-25): a session
+ * whose only shell grant was `Bash(git -C * pull)` ran `git status` anyway,
+ * and Cyrus's `canUseTool` callback was never consulted. The reason is
+ * `sandbox.autoAllowBashIfSandboxed` — Cyrus enables the SDK sandbox, and the
+ * SDK then auto-approves commands its own read-only classifier recognises
+ * (`git status`, `git log`, `ls`, `echo`) *before* the callback runs.
+ *
+ * `disallowedTools` is the layer that survives that. Deny rules are evaluated
+ * ahead of the sandbox auto-allow exemption *and* ahead of `canUseTool`, so a
+ * denied command is refused no matter which layer would otherwise wave it
+ * through — including allow rules in a settings file, which the SDK warns can
+ * shadow the callback invisibly. Verified in the same measurement: adding
+ * `Bash(git status:*)` flipped that command from allowed to
+ * "Permission to use Bash with command git status has been denied."
+ *
+ * Deny rules also apply to every link of a compound command, so
+ * `sed 's/…/…/' && mv tmp real` is refused on the strength of the `sed` entry.
+ *
+ * ## Why these commands
+ *
+ * The shell is the escape hatch that makes every other restriction cosmetic: a
+ * session denied `Edit` can still edit in place with `sed -i`, commit by
+ * pointing git at another directory, or merge a PR through the GitHub API.
+ * Each entry below closes one of those routes.
+ *
+ * @see {@link REVIEW_DISALLOWED_TOOLS} for the review persona's fixed list.
+ */
+export const MUTATING_BASH_DENY_RULES = [
+	// Rewrite history / publish code
+	"Bash(git commit:*)",
+	"Bash(git push:*)",
+	"Bash(git checkout:*)",
+	"Bash(git switch:*)",
+	"Bash(git reset:*)",
+	"Bash(git revert:*)",
+	"Bash(git merge:*)",
+	"Bash(git rebase:*)",
+	"Bash(git cherry-pick:*)",
+	"Bash(git apply:*)",
+	"Bash(git clean:*)",
+	"Bash(git stash:*)",
+	"Bash(git tag:*)",
+	"Bash(git branch:*)",
+	"Bash(git config:*)",
+	"Bash(git remote:*)",
+
+	// Act on the forge
+	"Bash(gh pr create:*)",
+	"Bash(gh pr merge:*)",
+	"Bash(gh pr close:*)",
+	"Bash(gh pr edit:*)",
+	"Bash(gh issue create:*)",
+	"Bash(gh issue edit:*)",
+	"Bash(gh issue close:*)",
+	"Bash(gh release:*)",
+	"Bash(gh workflow:*)",
+	"Bash(gh api:*)",
+	"Bash(gh repo:*)",
+	"Bash(gh secret:*)",
+	"Bash(glab:*)",
+
+	// In-place file mutation — the way around a denied Edit/Write
+	"Bash(sed:*)",
+	"Bash(perl:*)",
+	"Bash(awk:*)",
+	"Bash(tee:*)",
+	"Bash(dd:*)",
+	"Bash(truncate:*)",
+	"Bash(install:*)",
+	"Bash(patch:*)",
+
+	// Destroy / relocate
+	"Bash(rm:*)",
+	"Bash(rmdir:*)",
+	"Bash(mv:*)",
+	"Bash(cp:*)",
+	"Bash(ln:*)",
+	"Bash(chmod:*)",
+	"Bash(chown:*)",
+	"Bash(shred:*)",
+
+	// Publish or execute new code
+	"Bash(npm publish:*)",
+	"Bash(pnpm publish:*)",
+	"Bash(yarn publish:*)",
+	"Bash(npm install:*)",
+	"Bash(pnpm install:*)",
+	"Bash(pnpm add:*)",
+	"Bash(yarn add:*)",
+	"Bash(pip install:*)",
+	"Bash(brew:*)",
+	"Bash(docker:*)",
+	"Bash(kubectl:*)",
+	"Bash(terraform:*)",
+	"Bash(aws:*)",
+	"Bash(gcloud:*)",
+
+	// Privilege escalation
+	"Bash(sudo:*)",
+	"Bash(su:*)",
+	"Bash(doas:*)",
+] as const;
+
+/**
+ * Built-in tools that write to the filesystem, in deny-rule form.
+ *
+ * `tools` already removes these from a restricted session's context, but that
+ * is a *derivation* from `allowedTools` and only governs the built-in set.
+ * Denying them as well makes "this persona cannot write" a property of the
+ * configuration rather than of a derivation staying correct — and, unlike
+ * `tools`, a deny rule cannot be shadowed by a settings-file allow rule.
+ */
+export const WRITE_BUILT_IN_DENY_RULES = [
+	"Write",
+	"Edit",
+	"NotebookEdit",
+] as const;
+
+/**
  * Platform identifier used by callers that want to resolve a default list
  * dynamically. Keeps platform-string typos out of the call sites.
  */

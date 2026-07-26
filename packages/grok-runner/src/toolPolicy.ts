@@ -321,7 +321,22 @@ export function evaluatePermissionRequest(
 		return { allowed: true, reason: "tool reports read_only" };
 	}
 
-	const denied = new Set(policy.deny.map((rule) => splitRule(rule).head));
+	// A deny rule with no argument (`Write`, `Bash`) denies the whole tool
+	// class. A *scoped* rule (`Bash(sed:*)`) denies only the commands it names
+	// and must not be read as a blanket deny — doing so refuses the very
+	// commands the allow-list grants. That is not hypothetical: once CYR-25
+	// started deriving scoped `Bash(...)` denies, reading their head as a
+	// blanket "Bash" made a readOnly persona refuse its own
+	// `Bash(git -C * pull)` grant, i.e. every shell command it had.
+	const blanketDenied = new Set(
+		policy.deny
+			.filter((rule) => splitRule(rule).args === undefined)
+			.map((rule) => splitRule(rule).head),
+	);
+	const scopedBashDenies = policy.deny.filter((rule) => {
+		const { head, args } = splitRule(rule);
+		return head === "Bash" && args !== undefined;
+	});
 
 	if (mcpServer) {
 		const blocked = policy.deny.some((rule) => {
@@ -338,8 +353,46 @@ export function evaluatePermissionRequest(
 	for (const hint of hints) {
 		if (!MUTATING_TOOL_HINTS.has(hint)) continue;
 		for (const ruleName of ruleNamesForHint(hint)) {
-			if (denied.has(ruleName)) {
+			if (blanketDenied.has(ruleName)) {
 				return { allowed: false, reason: `${ruleName} is denied (${hint})` };
+			}
+		}
+
+		// Scoped shell denies are matched against the command itself, per link
+		// of a chain, so `git pull && sed -i …` is refused on the strength of
+		// the `sed` rule while a bare `git pull` still runs. Deny is checked
+		// before the allow-list so it wins, matching the Claude path where the
+		// SDK evaluates deny rules ahead of everything else.
+		if (
+			ruleNamesForHint(hint).includes("Bash") &&
+			scopedBashDenies.length > 0
+		) {
+			if (!command) {
+				return {
+					allowed: false,
+					reason: "shell call with no readable command (fail closed)",
+				};
+			}
+			// `null` means the command could not be parsed into links. Fail
+			// closed: an unparseable command is exactly where a deny rule would
+			// be evaded.
+			const links = splitShellCommands(command);
+			if (links === null) {
+				return {
+					allowed: false,
+					reason: "shell command could not be parsed (fail closed)",
+				};
+			}
+			for (const link of links) {
+				const matched = scopedBashDenies.find((rule) =>
+					commandMatchesAllowedBash(link, [rule]),
+				);
+				if (matched) {
+					return {
+						allowed: false,
+						reason: `shell command is denied by ${matched}: ${link.slice(0, 80)}`,
+					};
+				}
 			}
 		}
 
