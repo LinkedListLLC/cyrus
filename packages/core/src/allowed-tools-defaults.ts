@@ -97,15 +97,19 @@ export const LINEAR_DEFAULT_ALLOWED_TOOLS = [
  * can answer "look at the code in repo X" questions) plus the standard
  * planning/task tools, but no Edit/Write and no general Bash.
  *
- * Note on `Bash(git -C * pull)`: an argument-narrowed entry like this grants
- * nothing on the Claude path. `allowedTools` patterns only *auto-approve* —
- * they never deny — so a `Bash(...)` pattern cannot confine Bash to the one
- * command it names. Rather than hand a read-only chat session an arbitrary
- * shell, `deriveBuiltInTools` (cyrus-claude-runner) fails closed and withholds
- * Bash entirely; chat sessions read and search with Read/Grep/Glob instead.
- * The entry is retained because other runners (e.g. Grok, Cursor) translate
- * `allowedTools` into their own natively-enforced permission rules, where the
- * narrowing is meaningful.
+ * Note on `Bash(git -C * pull)`: an argument-narrowed entry like this means
+ * exactly what it says — the session may run `git -C <dir> pull`, and no other
+ * shell command. `allowedTools` alone cannot deliver that, because its patterns
+ * only *auto-approve* and never deny; each runner therefore enforces the
+ * narrowing itself. Grok and Cursor translate the entry into their own
+ * natively-enforced permission rules; the Claude runner checks every command in
+ * `canUseTool` against `commandMatchesAllowedBash` (see
+ * `packages/core/src/shell-command-policy.ts`), so a chain like
+ * `git -C x pull && rm -rf /` is refused rather than approved on its first word.
+ *
+ * Until CYR-20 the Claude runner instead failed closed and withheld Bash
+ * altogether, so this entry silently granted nothing there — which is how a
+ * review persona ended up unable to run `git diff`.
  */
 export const SLACK_DEFAULT_ALLOWED_TOOLS = [
 	// Read access to configured repository paths

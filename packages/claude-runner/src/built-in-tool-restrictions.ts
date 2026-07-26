@@ -48,13 +48,27 @@ import { availableTools } from "./config.js";
  *    ignores names it does not recognise, so forwarding them would give the
  *    false impression of a grant. Anything Cyrus does not recognise is not
  *    granted.
- * 2. **Argument-narrowed grants on mutating tools are dropped.** An entry like
- *    `Bash(git -C * pull)` reads as "only this command", but the narrowing is
- *    *not enforceable*: `allowedTools` patterns only auto-approve, they never
- *    deny. Granting `Bash` because of such an entry would hand a "read-only"
- *    persona an arbitrary shell — and therefore arbitrary writes. Since the
- *    intent is clearly narrower than full access and the narrowing cannot be
- *    honoured, the tool is withheld entirely.
+ * 2. **Argument-narrowed grants on mutating tools are dropped — except
+ *    `Bash`.** An entry like `Edit(src/**)` reads as "only these paths", but
+ *    the narrowing is *not enforceable*: `allowedTools` patterns only
+ *    auto-approve, they never deny. Granting `Edit` because of such an entry
+ *    would hand a "read-only" persona arbitrary writes. Since the intent is
+ *    clearly narrower than full access and the narrowing cannot be honoured,
+ *    the tool is withheld entirely.
+ *
+ *    `Bash` is the exception, because it is the one mutating tool whose
+ *    narrowing Cyrus *can* honour. `ClaudeRunner` enforces scoped `Bash(...)`
+ *    grants itself in its `canUseTool` callback, using the shared shell matcher
+ *    in `cyrus-core` (`commandMatchesAllowedBash`) that checks every command in
+ *    a chain rather than just the first word. Withholding `Bash` here instead
+ *    was silently wrong: a `readOnly` reviewer whose whole allow-list is
+ *    `Bash(git diff:*)`-shaped got no shell at all, so it reviewed the files at
+ *    PR head with no idea what had changed — and said nothing about it (CYR-20).
+ *
+ *    This is only safe because `ClaudeRunner` installs that callback
+ *    unconditionally and keeps `Bash` out of the `allowedTools` it hands the
+ *    SDK, so no Bash call can be auto-approved before the callback runs. If you
+ *    change either of those, this exception stops being sound.
  *
  *    Narrowing on non-mutating tools (notably `Read(/path/**)`, which
  *    `ClaudeRunner` generates from `allowedDirectories`) is safe to ignore:
@@ -74,6 +88,17 @@ export const MUTATING_BUILT_IN_TOOLS: ReadonlySet<string> = new Set([
 	"Write",
 	"NotebookEdit",
 ]);
+
+/**
+ * Mutating tools whose argument-narrowed grants Cyrus can actually enforce, and
+ * which are therefore granted rather than withheld (rule 2 above).
+ *
+ * Only `Bash`: `ClaudeRunner.createCanUseToolCallback` checks each shell
+ * command against the grants via `commandMatchesAllowedBash`. There is no
+ * equivalent enforcement for `Edit`/`Write`/`NotebookEdit` path narrowing, so
+ * those still fail closed.
+ */
+const ENFORCEABLY_NARROWED_TOOLS: ReadonlySet<string> = new Set(["Bash"]);
 
 /**
  * Read-only search tools granted alongside `Read`.
@@ -167,6 +192,7 @@ export function deriveBuiltInTools(
 		if (
 			argument !== undefined &&
 			MUTATING_BUILT_IN_TOOLS.has(name) &&
+			!ENFORCEABLY_NARROWED_TOOLS.has(name) &&
 			!isUnrestrictedArgument(argument)
 		) {
 			onDropped?.(
