@@ -1,4 +1,5 @@
 import * as claudeCode from "@anthropic-ai/claude-agent-sdk";
+import { REVIEW_ALLOWED_TOOLS } from "cyrus-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveBuiltInTools } from "../src/built-in-tool-restrictions";
 import { ClaudeRunner } from "../src/ClaudeRunner";
@@ -21,36 +22,11 @@ vi.mock("fs", () => ({
 	statSync: vi.fn(() => ({ isDirectory: vi.fn(() => true) })),
 }));
 
-/**
- * The reviewer allow-list from `reviewOnStatus` (PR #2's
- * `REVIEW_ALLOWED_TOOLS`), reproduced verbatim. It is built almost entirely
- * from argument-narrowed `Bash(...)` grants, which is the shape this file
- * exists to keep enforceable.
- */
-const REVIEW_ALLOWED_TOOLS = [
-	"Read",
-	"Glob",
-	"Grep",
-
-	"Bash(git diff:*)",
-	"Bash(git log:*)",
-	"Bash(git show:*)",
-	"Bash(git status:*)",
-	"Bash(git blame:*)",
-	"Bash(gh pr view:*)",
-	"Bash(gh pr diff:*)",
-
-	"WebFetch",
-	"WebSearch",
-
-	"TaskCreate",
-	"TaskUpdate",
-	"TaskGet",
-	"TaskList",
-	"ToolSearch",
-
-	"mcp__linear",
-];
+// The reviewer allow-list is imported from `cyrus-core` (the real
+// `REVIEW_ALLOWED_TOOLS` from `reviewOnStatus`) rather than copied, so this
+// test cannot drift from the constant it exercises. It is built almost
+// entirely from argument-narrowed `Bash(...)` grants, which is the shape this
+// file exists to keep enforceable.
 
 describe("deriveBuiltInTools — scoped Bash grants", () => {
 	it("grants Bash for an argument-narrowed grant, because canUseTool now enforces the narrowing", () => {
