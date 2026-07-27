@@ -594,4 +594,4 @@ The GeminiRunner automatically generates a `~/.gemini/settings.json` file with s
 
 This is the LinkedList self-hosted fork. We plan changes to it as **Linear** issues in the **Cyrus** team (`CYR`), using Matt Pocock's planning skills installed here (`wayfinder`, `research`, `prototype`, `grilling`, `domain-modeling`, `handoff` — see `skills-lock.json`). Tracker conventions + the wayfinder map/ticket operations + the **Todo = "Ready"** gate: **[docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)**.
 
-When a `wayfinder` ticket poses an open-ended decision, run the `adhd` skill first to widen the options before you decide.
+In `wayfinder`, `grilling`, or plan mode (`/plan`), run the `adhd` skill first on an open-ended decision to widen the options.
