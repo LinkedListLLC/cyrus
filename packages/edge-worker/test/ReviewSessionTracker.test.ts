@@ -256,6 +256,42 @@ describe("ReviewSessionTracker - the marker belongs to one session (CYR-16 / B4)
 	});
 });
 
+describe("ReviewSessionTracker - adoptReviewSession (delegated review, CYR-35)", () => {
+	it("claims the session and marks the issue in flight", () => {
+		const tracker = new ReviewSessionTracker();
+
+		tracker.adoptReviewSession("delegated-session", "issue-1");
+
+		// Recognisably a review, so a late echo is not restarted as a builder.
+		expect(tracker.isReviewSession("delegated-session")).toBe(true);
+		// In flight, so a later `reviewOnStatus` transition declines rather than
+		// starting a second concurrent review of the same PR.
+		expect(tracker.hasReviewInFlight("issue-1")).toBe(true);
+	});
+
+	it("releases the in-flight guard when the delegated review completes", () => {
+		const tracker = new ReviewSessionTracker();
+		tracker.adoptReviewSession("delegated-session", "issue-1");
+
+		tracker.completeReview("delegated-session");
+
+		expect(tracker.hasReviewInFlight("issue-1")).toBe(false);
+	});
+
+	it("expires the guard so a crashed delegated review cannot wedge the issue", () => {
+		let now = 1_000;
+		const tracker = new ReviewSessionTracker({
+			activeTtlMs: 500,
+			now: () => now,
+		});
+		tracker.adoptReviewSession("delegated-session", "issue-1");
+		expect(tracker.hasReviewInFlight("issue-1")).toBe(true);
+
+		now += 501;
+		expect(tracker.hasReviewInFlight("issue-1")).toBe(false);
+	});
+});
+
 describe("ReviewSessionTracker - awaitPendingMint", () => {
 	it("resolves immediately when no mint is in flight", async () => {
 		const tracker = new ReviewSessionTracker();

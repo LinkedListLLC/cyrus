@@ -3975,6 +3975,25 @@ ${taskSection}`;
 			return;
 		}
 
+		// The `Issue` webhook subscription fans EVERY state change in the
+		// workspace into this handler, but it has only two jobs: start a
+		// `reviewOnStatus` review, and wake parked sessions that this issue was
+		// blocking. Neither applies to the overwhelming majority of issues, and
+		// both predicates are answerable from in-memory state — so settle them
+		// BEFORE paying for a `fetchIssue` round-trip. Without this short-circuit
+		// every workspace-wide state change costs one Linear API call.
+		//
+		// NB: do NOT gate on `resolveRepositoryForIssue` alone. A *blocker* can be
+		// any issue in the workspace, including one Cyrus has never worked and
+		// that routes to no repository — that is exactly the parked-session path,
+		// and it is the reason the fetch exists at all.
+		const repository = this.resolveRepositoryForIssue(completedIssueId);
+		const repoWantsStatusReview = Boolean(repository?.reviewOnStatus?.trim());
+		const blocksParkedSession = this.isBlockingParkedSession(completedIssueId);
+		if (!repoWantsStatusReview && !blocksParkedSession) {
+			return;
+		}
+
 		// Fetch the issue to check its current state type
 		let stateType: string | undefined;
 		let stateName: string | undefined;
@@ -3997,7 +4016,6 @@ ${taskSection}`;
 		}
 
 		if (stateName) {
-			const repository = this.resolveRepositoryForIssue(completedIssueId);
 			if (matchesReviewStatus(repository?.reviewOnStatus, stateName)) {
 				this.logger.warn(
 					`reviewOnStatus is configured as "${repository?.reviewOnStatus}" for ${repository?.name}, but that is a ${stateType} state — reviews are not started for terminal states (the issue's sessions and worktrees are torn down there).`,
@@ -4082,6 +4100,21 @@ ${taskSection}`;
 	 * not re-run routing: a status transition carries no routing signal beyond
 	 * what the original session already established.
 	 */
+	/**
+	 * Is this issue an unresolved blocker for any parked session?
+	 *
+	 * In-memory only — deliberately does no I/O so `handleIssueStateChange` can
+	 * decide whether a state change is relevant before spending a `fetchIssue`.
+	 * A blocker can be any workspace issue, including one that routes to no
+	 * repository, so this is checked independently of repository resolution.
+	 */
+	private isBlockingParkedSession(issueId: string): boolean {
+		for (const parked of this.parkedSessions.values()) {
+			if (parked.blockingIssueIds.includes(issueId)) return true;
+		}
+		return false;
+	}
+
 	private resolveRepositoryForIssue(issueId: string): RepositoryConfig | null {
 		const cached = this.getCachedRepository(issueId);
 		if (cached) return cached;
@@ -4845,11 +4878,43 @@ ${taskSection}`;
 			stateName: stateName as string,
 		};
 
-		// Deliberately not gated on `hasReviewInFlight`: that guard exists to
-		// absorb *redelivered webhooks* for one transition, whereas a delegation
-		// is an explicit human act each time. Sessions and their worktrees are
-		// keyed by session id, so a second review cannot collide with the first.
-		this.reviewSessions.adoptReviewSession(sessionId);
+		// Once the `Issue` webhook subscription is live, both review triggers
+		// fire: moving an issue into the review state starts a `reviewOnStatus`
+		// review, and delegating (or @mentioning) it starts this one. If a review
+		// is already in flight for the issue we must not start a second,
+		// concurrent one on the same PR — but the two blocking constraints from
+		// CYR-16 forbid the easy escapes:
+		//
+		//   * We cannot fall through to the builder (return false): a session on
+		//     an issue in the review state silently becoming a builder with write
+		//     tools is exactly the inversion B1/B4 exists to prevent.
+		//   * We cannot return true and go quiet: a human created this session, and
+		//     a session left silently doing nothing is the orphan mode B5 removed.
+		//
+		// So we consume the session (return true, never a builder) but say so:
+		// post a terminal `response` on its thread explaining the decline. The
+		// happy path below registers the review as in-flight (`adoptReviewSession`)
+		// precisely so this guard — and the symmetric one in `maybeStartStatusReview`
+		// — can see it.
+		if (this.reviewSessions.hasReviewInFlight(issueId)) {
+			this.logger.info(
+				`${issueIdentifier} was delegated in "${stateName}", but a review is already in progress — declining rather than starting a second concurrent review.`,
+			);
+			await this.postActivityDirect(
+				issueTracker,
+				{
+					agentSessionId: sessionId,
+					content: {
+						type: "response",
+						body: `A review of this issue is already in progress, so I won't start a second one on the same pull request. Follow the existing review's thread for its findings.`,
+					},
+				},
+				"delegated review declined — already in flight",
+			);
+			return true;
+		}
+
+		this.reviewSessions.adoptReviewSession(sessionId, issueId);
 		await this.initializeReviewRunner(sessionId, context, linearWorkspaceId);
 		return true;
 	}

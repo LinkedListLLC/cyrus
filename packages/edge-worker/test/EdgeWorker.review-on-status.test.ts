@@ -540,6 +540,152 @@ describe("EdgeWorker - reviewOnStatus trigger (CYR-5)", () => {
 		expect(disallowedTools).toContain("Write");
 	});
 
+	/**
+	 * CYR-35 / item 1. Enabling the `Issue` webhook subscription fans EVERY
+	 * workspace state change into `handleIssueStateChange`. A change on an issue
+	 * that routes nowhere and blocks nothing must be settled from in-memory state
+	 * — never at the cost of a `fetchIssue` round-trip to Linear.
+	 */
+	it("does not fetch the issue for an unrelated workspace state change", async () => {
+		const worker = createWorker("In Review", "In Review");
+		// An issue Cyrus has never worked: it routes to no repository...
+		(worker as any).resolveRepositoryForIssue = vi.fn().mockReturnValue(null);
+		// ...and `parkedSessions` is empty, so it blocks nothing.
+
+		await (worker as any).handleIssueStateChange(createStateChangeWebhook());
+
+		expect(mockIssueTracker.fetchIssue).not.toHaveBeenCalled();
+		expect(mockIssueTracker.createAgentSessionOnIssue).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * CYR-35 / item 1, the trap. The short-circuit must NOT gate on repository
+	 * resolution alone: a blocker can be any issue in the workspace, including
+	 * one that routes to no repository. That path is the whole reason the fetch
+	 * exists, so it must keep fetching and keep waking the parked session.
+	 */
+	it("still wakes a parked session when its blocker resolves to no repository", async () => {
+		const worker = createWorker("Done", "Done", "completed");
+		// The blocker (issue-1) routes to nothing — Cyrus never worked it.
+		(worker as any).resolveRepositoryForIssue = vi.fn().mockReturnValue(null);
+
+		const initializeAgentRunner = vi.fn().mockResolvedValue(undefined);
+		(worker as any).initializeAgentRunner = initializeAgentRunner;
+		(worker as any).activityPoster = {
+			postThoughtActivity: vi.fn().mockResolvedValue(undefined),
+		};
+
+		// A session on a DIFFERENT issue is parked, blocked by issue-1.
+		(worker as any).parkedSessions.set("blocked-issue", {
+			agentSession: { id: "parked-session-1", issue: { identifier: "TEST-2" } },
+			repositories: [buildRepository("Done")],
+			linearWorkspaceId: "test-workspace",
+			guidance: undefined,
+			commentBody: undefined,
+			baseBranchOverrides: undefined,
+			routingMethod: undefined,
+			blockingIssueIds: ["issue-1"],
+		});
+
+		await (worker as any).handleIssueStateChange(createStateChangeWebhook());
+
+		// The fetch must still happen — it is the only way to learn the blocker
+		// reached a terminal state...
+		expect(mockIssueTracker.fetchIssue).toHaveBeenCalledTimes(1);
+		// ...and the parked session must wake and be unparked.
+		expect(initializeAgentRunner).toHaveBeenCalledTimes(1);
+		expect((worker as any).parkedSessions.has("blocked-issue")).toBe(false);
+	});
+
+	/**
+	 * CYR-35 / item 2. With the subscription live both review triggers fire. If a
+	 * `reviewOnStatus` review is already in flight, a subsequent delegation must
+	 * not start a second concurrent review on the same PR. Per CYR-16 it may not
+	 * fall through to the builder (B1/B4) nor go silently idle (B5) — so it is
+	 * consumed with an explanatory response on the session's own thread.
+	 */
+	it("declines a delegated review when one is already in flight, and says so", async () => {
+		const worker = createWorker("In Review", "In Review");
+		const repository = {
+			...buildRepository("In Review"),
+			reviewOnDelegateInStatus: true,
+		} as RepositoryConfig;
+
+		const initializeReviewRunner = vi.fn().mockResolvedValue(undefined);
+		(worker as any).initializeReviewRunner = initializeReviewRunner;
+		const postActivityDirect = vi.fn().mockResolvedValue("activity-1");
+		(worker as any).activityPoster = { postActivityDirect };
+
+		// A `reviewOnStatus` review is already in flight for this issue.
+		(worker as any).reviewSessions.beginReview({
+			issueId: "issue-1",
+			issueIdentifier: "TEST-1",
+			repositoryId: "test-repo",
+			linearWorkspaceId: "test-workspace",
+			stateName: "In Review",
+		});
+
+		const handled = await (worker as any).maybeStartDelegatedReview(
+			{
+				type: "AgentSessionEvent",
+				action: "created",
+				organizationId: "test-workspace",
+				agentSession: {
+					id: "delegated-session-1",
+					issue: { id: "issue-1", identifier: "TEST-1" },
+				},
+			},
+			repository,
+			"test-workspace",
+		);
+
+		// Consumed (so it never falls through to the builder path)...
+		expect(handled).toBe(true);
+		// ...no second review runner started...
+		expect(initializeReviewRunner).not.toHaveBeenCalled();
+		// ...and the human is told why, as a terminal response on this session.
+		expect(postActivityDirect).toHaveBeenCalledTimes(1);
+		const input = postActivityDirect.mock.calls[0]![1];
+		expect(input.agentSessionId).toBe("delegated-session-1");
+		expect(input.content.type).toBe("response");
+	});
+
+	/**
+	 * CYR-35 / item 2, the reverse direction. A delegation-triggered review must
+	 * register itself in flight so that a *later* `reviewOnStatus` transition on
+	 * the same issue declines instead of minting a second review.
+	 */
+	it("a delegated review blocks a later status transition from double-reviewing", async () => {
+		const worker = createWorker("In Review", "In Review");
+		const repository = {
+			...buildRepository("In Review"),
+			reviewOnDelegateInStatus: true,
+		} as RepositoryConfig;
+		const initializeReviewRunner = vi.fn().mockResolvedValue(undefined);
+		(worker as any).initializeReviewRunner = initializeReviewRunner;
+
+		// The delegation starts a review...
+		const handled = await (worker as any).maybeStartDelegatedReview(
+			{
+				type: "AgentSessionEvent",
+				action: "created",
+				organizationId: "test-workspace",
+				agentSession: {
+					id: "delegated-session-1",
+					issue: { id: "issue-1", identifier: "TEST-1" },
+				},
+			},
+			repository,
+			"test-workspace",
+		);
+		expect(handled).toBe(true);
+		expect(initializeReviewRunner).toHaveBeenCalledTimes(1);
+
+		// ...so a subsequent move into the review state must NOT mint another.
+		await (worker as any).handleIssueStateChange(createStateChangeWebhook());
+		expect(mockIssueTracker.createAgentSessionOnIssue).not.toHaveBeenCalled();
+	});
+
 	it("leaves an unrelated agent session on the same issue as a builder session", async () => {
 		const worker = createWorker("In Review", "In Review");
 		const initializeReviewRunner = vi.fn().mockResolvedValue(undefined);
