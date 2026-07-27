@@ -325,6 +325,13 @@ export class EdgeWorker extends EventEmitter {
 	 * a log line.
 	 */
 	private sawIssueEntityWebhook = false;
+	/**
+	 * Distinct from {@link sawIssueEntityWebhook}: an `Issue` webhook proves the
+	 * subscription is live, but only one carrying a `stateId` proves the
+	 * *reviewer* is reachable. Conflating the two is what made the old signal
+	 * announce a working trigger on the strength of a description edit (CYR-46).
+	 */
+	private sawIssueStateChangeWebhook = false;
 	private warnedReviewTriggerUnreachable = false;
 
 	/**
@@ -3233,14 +3240,36 @@ ${taskSection}`;
 	private trackReviewTriggerReachability(
 		webhookType: string | undefined,
 		webhookAction: string | undefined,
+		webhook: Webhook,
 	): void {
 		if (webhookType === "Issue") {
-			if (!this.sawIssueEntityWebhook) {
-				this.sawIssueEntityWebhook = true;
+			// Claim only what has actually been observed.
+			//
+			// This used to fire on *any* `Issue` webhook and announce that "the
+			// reviewOnStatus trigger is reachable". It isn't the same thing: the
+			// reviewer is reached only by an `Issue`/`update` carrying a `stateId`
+			// in `updatedFrom`. A description edit is an `Issue` webhook too, and
+			// it routes somewhere the reviewer can never be reached from.
+			//
+			// That over-claim cost real time (CYR-46): the message was taken as
+			// proof the trigger worked, which ruled out the channel and sent the
+			// investigation looking at the wrong layer. A signal that asserts more
+			// than it measured is worse than no signal.
+			const carriesStateChange = isIssueStateIdUpdateWebhook(webhook);
+			if (carriesStateChange && !this.sawIssueStateChangeWebhook) {
+				this.sawIssueStateChangeWebhook = true;
 				this.logger.info(
-					"✅ Issue entity webhook received — the reviewOnStatus trigger is reachable on this deployment.",
+					"✅ Issue/update webhook carrying a stateId received — the reviewOnStatus " +
+						"trigger is reachable on this deployment.",
+				);
+			} else if (!this.sawIssueEntityWebhook) {
+				this.logger.info(
+					"Issue entity webhook received (no stateId in updatedFrom, so not a state " +
+						"change). The Issue subscription is live; this particular webhook cannot " +
+						"start a review.",
 				);
 			}
+			this.sawIssueEntityWebhook = true;
 			return;
 		}
 
@@ -3287,7 +3316,7 @@ ${taskSection}`;
 			repoCount: repos.length,
 		});
 
-		this.trackReviewTriggerReachability(webhookType, webhookAction);
+		this.trackReviewTriggerReachability(webhookType, webhookAction, webhook);
 
 		// Log verbose webhook info if enabled
 		if (process.env.CYRUS_WEBHOOK_DEBUG === "true") {
@@ -3321,12 +3350,30 @@ ${taskSection}`;
 			} else if (isIssueDeletedWebhook(webhook)) {
 				// Issue deletion also handled via message bus — same cleanup as terminal state.
 				return;
-			} else if (isIssueTitleOrDescriptionUpdateWebhook(webhook)) {
-				// Handle issue title/description/attachments updates - feed changes into active session
-				await this.handleIssueContentUpdate(webhook);
-			} else if (isIssueStateIdUpdateWebhook(webhook)) {
-				// Handle issue state changes — wake up parked sessions when blocking issues complete
-				await this.handleIssueStateChange(webhook);
+			} else if (
+				isIssueTitleOrDescriptionUpdateWebhook(webhook) ||
+				isIssueStateIdUpdateWebhook(webhook)
+			) {
+				// NOT an either/or, and it used to be. Linear packs *every* field
+				// changed by one save into a single `updatedFrom`, so one webhook is
+				// routinely both a content update and a state change — renaming an
+				// issue as you move it to In Review is one save, one webhook.
+				//
+				// These were two `else if` branches with the content predicate first.
+				// First match wins, so any state change bundled with a title,
+				// description or attachment change was handed to the content handler
+				// and never reached the reviewer (CYR-46). Reordering only moves the
+				// dropped path onto the other handler; the concerns are independent,
+				// so both run.
+				if (isIssueTitleOrDescriptionUpdateWebhook(webhook)) {
+					// Feed title/description/attachment changes into an active session.
+					await this.handleIssueContentUpdate(webhook);
+				}
+				if (isIssueStateIdUpdateWebhook(webhook)) {
+					// Start a `reviewOnStatus` review; wake parked sessions when a
+					// blocking issue completes.
+					await this.handleIssueStateChange(webhook);
+				}
 			} else {
 				if (process.env.CYRUS_WEBHOOK_DEBUG === "true") {
 					this.logger.debug(
@@ -3991,6 +4038,27 @@ ${taskSection}`;
 		const repoWantsStatusReview = Boolean(repository?.reviewOnStatus?.trim());
 		const blocksParkedSession = this.isBlockingParkedSession(completedIssueId);
 		if (!repoWantsStatusReview && !blocksParkedSession) {
+			// Logged at INFO, and only when some repository actually wants reviews.
+			//
+			// This return used to be silent, and it is the most likely place for a
+			// review to die: an issue Cyrus has never worked resolves to no
+			// repository at all. Silence here is indistinguishable from the feature
+			// not existing, which is exactly how `reviewOnStatus` went five
+			// attempts and two weeks without a diagnosis (CYR-46).
+			//
+			// The `waiting` guard keeps this quiet on deployments that don't use
+			// the feature — otherwise the `Issue` subscription, which fans every
+			// state change in the workspace through here, would make this the
+			// noisiest line in the log.
+			if (this.repositoriesAwaitingReviewTrigger().length > 0) {
+				this.logger.info(
+					`No review for ${issueIdentifier}: ${
+						repository
+							? `repository '${repository.name}' has no reviewOnStatus configured`
+							: "no session has ever run for this issue on this instance, so it resolves to no repository"
+					}, and it is not blocking a parked session.`,
+				);
+			}
 			return;
 		}
 
@@ -4147,24 +4215,36 @@ ${taskSection}`;
 		const issueId = webhook.data.id;
 		const issueIdentifier = webhook.data.identifier;
 
+		// Every decline below logs at INFO with its reason. Production runs at
+		// INFO, and these used to be `debug` or nothing at all — so a declined
+		// review looked exactly like a feature that had never been built. That
+		// silence, not any single bug, is why `reviewOnStatus` went five attempts
+		// and two weeks without a diagnosis (CYR-46). The volume is bounded: this
+		// method is only reached for a state change that already passed the
+		// `repositoriesAwaitingReviewTrigger` gate in `handleIssueStateChange`.
 		const repository = this.resolveRepositoryForIssue(issueId);
 		if (!repository) {
-			// No session has ever run for this issue on this instance, so there is
-			// nothing of ours to review.
-			this.logger.debug(
-				`No repository resolved for ${issueIdentifier} state change — skipping review check`,
+			this.logger.info(
+				`No review for ${issueIdentifier}: no session has ever run for this issue on ` +
+					`this instance, so it resolves to no repository. Reviews only fire for ` +
+					`issues Cyrus itself has worked.`,
 			);
 			return;
 		}
 
 		if (!matchesReviewStatus(repository.reviewOnStatus, stateName)) {
+			this.logger.info(
+				`No review for ${issueIdentifier}: moved to "${stateName}", but ` +
+					`'${repository.name}' triggers on "${repository.reviewOnStatus}".`,
+			);
 			return;
 		}
 
 		const webhookKey = `review:${webhook.createdAt}:${issueId}`;
 		if (!this.reviewSessions.markWebhookProcessed(webhookKey)) {
-			this.logger.debug(
-				`Duplicate review trigger for ${issueIdentifier} (key=${webhookKey}), skipping`,
+			this.logger.info(
+				`No review for ${issueIdentifier}: duplicate trigger (key=${webhookKey}) — ` +
+					`Linear delivers at-least-once, so this is expected on a redelivery.`,
 			);
 			return;
 		}

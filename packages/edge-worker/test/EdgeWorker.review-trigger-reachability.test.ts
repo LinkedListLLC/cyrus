@@ -98,6 +98,23 @@ describe("EdgeWorker - reviewOnStatus trigger reachability (CYR-33)", () => {
 			data: { id: "issue-1", identifier: "TEST-1", title: "Renamed" },
 			updatedFrom: { title: "Test Issue" },
 		}),
+		// CYR-46: one save that changes state AND content. Linear packs every
+		// changed field into a single `updatedFrom`, so this is an ordinary
+		// webhook, not a contrived one — renaming an issue as you move it to
+		// In Review produces exactly this.
+		"Issue/update (stateId AND title changed)": () => ({
+			type: "Issue",
+			action: "update",
+			organizationId: "test-workspace",
+			createdAt: "2026-07-26T17:47:49Z",
+			data: {
+				id: "issue-1",
+				identifier: "TEST-1",
+				title: "Renamed",
+				stateId: "state-in-review",
+			},
+			updatedFrom: { stateId: "state-in-progress", title: "Test Issue" },
+		}),
 		"Issue/remove": () => ({
 			type: "Issue",
 			action: "remove",
@@ -153,8 +170,20 @@ describe("EdgeWorker - reviewOnStatus trigger reachability (CYR-33)", () => {
 		}),
 	};
 
-	/** Only this one may ever start a review. */
-	const REACHING = "Issue/update (stateId changed)";
+	/**
+	 * The shapes that must reach the review: anything whose `updatedFrom` carries
+	 * a `stateId`, whether or not it *also* carries content changes.
+	 *
+	 * Was a single label until CYR-46. The combined shape was routed to the
+	 * content handler and silently dropped, because the router tested the content
+	 * predicate first in an `else if` chain.
+	 */
+	const REACHING = new Set([
+		"Issue/update (stateId changed)",
+		"Issue/update (stateId AND title changed)",
+	]);
+	/** The canonical reaching shape, for tests that need just one. */
+	const REACHING_SIMPLE = "Issue/update (stateId changed)";
 
 	function createWorker(): EdgeWorker {
 		const worker = new EdgeWorker(buildConfig());
@@ -260,7 +289,7 @@ describe("EdgeWorker - reviewOnStatus trigger reachability (CYR-33)", () => {
 
 	describe("the reachable set is exactly one webhook shape", () => {
 		for (const [label, build] of Object.entries(WEBHOOKS)) {
-			const shouldReach = label === REACHING;
+			const shouldReach = REACHING.has(label);
 
 			it(`${shouldReach ? "reaches" : "does NOT reach"} the review: ${label}`, async () => {
 				const worker = createWorker();
@@ -300,12 +329,174 @@ describe("EdgeWorker - reviewOnStatus trigger reachability (CYR-33)", () => {
 		const worker = createWorker();
 		const tracker = (worker as any).issueTrackers.get("test-workspace");
 
-		await (worker as any).handleWebhook(WEBHOOKS[REACHING](), [
+		await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
 			buildRepository(),
 		]);
 
 		expect(tracker.createAgentSessionOnIssue).toHaveBeenCalledWith({
 			issueId: "issue-1",
+		});
+	});
+
+	describe("a webhook that is both a content change and a state change (CYR-46)", () => {
+		// The defect that kept `reviewOnStatus` dead in production. The router
+		// tested the content predicate first in an `else if` chain, so a state
+		// change bundled with a title/description/attachment change went to the
+		// content handler and the reviewer never saw it. Reordering would only
+		// have moved the dropped path onto the other handler, so both now run.
+		it("runs BOTH handlers, not whichever predicate matched first", async () => {
+			const worker = createWorker();
+			const stateChange = vi
+				.spyOn(worker as any, "handleIssueStateChange")
+				.mockResolvedValue(undefined);
+			const contentUpdate = (worker as any).handleIssueContentUpdate;
+
+			await (worker as any).handleWebhook(
+				WEBHOOKS["Issue/update (stateId AND title changed)"](),
+				[buildRepository()],
+			);
+
+			expect(contentUpdate).toHaveBeenCalledTimes(1);
+			expect(stateChange).toHaveBeenCalledTimes(1);
+		});
+
+		it("starts a real review end-to-end for the combined shape", async () => {
+			const worker = createWorker();
+			const tracker = (worker as any).issueTrackers.get("test-workspace");
+
+			await (worker as any).handleWebhook(
+				WEBHOOKS["Issue/update (stateId AND title changed)"](),
+				[buildRepository()],
+			);
+
+			expect(tracker.createAgentSessionOnIssue).toHaveBeenCalledWith({
+				issueId: "issue-1",
+			});
+		});
+
+		it("still runs only the content handler when no stateId is present", async () => {
+			const worker = createWorker();
+			const stateChange = vi
+				.spyOn(worker as any, "handleIssueStateChange")
+				.mockResolvedValue(undefined);
+			const contentUpdate = (worker as any).handleIssueContentUpdate;
+
+			await (worker as any).handleWebhook(
+				WEBHOOKS["Issue/update (title changed)"](),
+				[buildRepository()],
+			);
+
+			expect(contentUpdate).toHaveBeenCalledTimes(1);
+			expect(stateChange).not.toHaveBeenCalled();
+		});
+
+		it("still runs only the state handler when no content changed", async () => {
+			const worker = createWorker();
+			const stateChange = vi
+				.spyOn(worker as any, "handleIssueStateChange")
+				.mockResolvedValue(undefined);
+			const contentUpdate = (worker as any).handleIssueContentUpdate;
+
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
+				buildRepository(),
+			]);
+
+			expect(contentUpdate).not.toHaveBeenCalled();
+			expect(stateChange).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("the reachability signal claims only what it observed (CYR-46)", () => {
+		it("does NOT announce the trigger reachable on a content-only Issue webhook", async () => {
+			// The old signal fired on *any* Issue webhook and announced the review
+			// trigger was reachable. It was observed doing exactly this on a
+			// description edit, which sent a live investigation at the wrong layer
+			// for hours.
+			const worker = createWorker();
+			const info = vi.spyOn((worker as any).logger, "info");
+
+			await (worker as any).handleWebhook(
+				WEBHOOKS["Issue/update (title changed)"](),
+				[buildRepository()],
+			);
+
+			const claimedReachable = info.mock.calls.some((call) =>
+				String(call[0]).includes("trigger is reachable"),
+			);
+			expect(claimedReachable).toBe(false);
+		});
+
+		it("announces the trigger reachable once a stateId-carrying webhook arrives", async () => {
+			const worker = createWorker();
+			const info = vi.spyOn((worker as any).logger, "info");
+
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
+				buildRepository(),
+			]);
+
+			const claimedReachable = info.mock.calls.some((call) =>
+				String(call[0]).includes("trigger is reachable"),
+			);
+			expect(claimedReachable).toBe(true);
+		});
+	});
+
+	describe("declines are visible at INFO (CYR-46)", () => {
+		// Production runs at INFO. These declines used to be `debug` or nothing,
+		// which made a declined review indistinguishable from a feature that had
+		// never been built — the reason this took five attempts to diagnose.
+		it("says why when the issue resolves to no repository", async () => {
+			const worker = createWorker();
+			(worker as any).resolveRepositoryForIssue = vi.fn().mockReturnValue(null);
+			const info = vi.spyOn((worker as any).logger, "info");
+
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
+				buildRepository(),
+			]);
+
+			const explained = info.mock.calls.some((call) =>
+				String(call[0]).includes("resolves to no repository"),
+			);
+			expect(explained).toBe(true);
+		});
+
+		it("says why when the state name does not match reviewOnStatus", async () => {
+			const worker = createWorker();
+			const tracker = (worker as any).issueTrackers.get("test-workspace");
+			tracker.fetchIssue = vi.fn().mockResolvedValue({
+				id: "issue-1",
+				identifier: "TEST-1",
+				state: Promise.resolve({ name: "In Progress", type: "started" }),
+			});
+			const info = vi.spyOn((worker as any).logger, "info");
+
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
+				buildRepository(),
+			]);
+
+			const explained = info.mock.calls.some(
+				(call) =>
+					String(call[0]).includes("In Progress") &&
+					String(call[0]).includes("In Review"),
+			);
+			expect(explained).toBe(true);
+		});
+
+		it("says why when the same webhook is redelivered", async () => {
+			const worker = createWorker();
+			const info = vi.spyOn((worker as any).logger, "info");
+
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
+				buildRepository(),
+			]);
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
+				buildRepository(),
+			]);
+
+			const explained = info.mock.calls.some((call) =>
+				String(call[0]).includes("duplicate trigger"),
+			);
+			expect(explained).toBe(true);
 		});
 	});
 
@@ -342,7 +533,7 @@ describe("EdgeWorker - reviewOnStatus trigger reachability (CYR-33)", () => {
 			const worker = createWorker();
 			const warn = vi.spyOn((worker as any).logger, "warn");
 
-			await (worker as any).handleWebhook(WEBHOOKS[REACHING](), [
+			await (worker as any).handleWebhook(WEBHOOKS[REACHING_SIMPLE](), [
 				buildRepository(),
 			]);
 			await (worker as any).handleWebhook(
