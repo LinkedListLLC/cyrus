@@ -265,6 +265,79 @@ export const REVIEW_ALLOWED_TOOLS = [
 ] as const;
 
 /**
+ * Allowed tools for the `readOnly` preset — any persona that investigates a
+ * codebase and reports back without changing it (`scoper`, the read-only
+ * Wayfinder persona, and any future analyst).
+ *
+ * Until CYR-37 the `readOnly` preset resolved to
+ * {@link SLACK_DEFAULT_ALLOWED_TOOLS}, which is a *chat* toolset: it has no
+ * `Grep`, no `Glob`, and no git inspection commands. A `scoper` configured
+ * `readOnly` therefore could not search the codebase it was scoping — it could
+ * only `Read` paths it already knew. That is the same gap that forced
+ * {@link REVIEW_ALLOWED_TOOLS} to hand-roll its own list, so this constant
+ * generalises that list for label-based personas.
+ *
+ * Differences from {@link REVIEW_ALLOWED_TOOLS}, all deliberate:
+ * - `Task`/`TaskOutput`/`TaskStop` are included. A review is one focused pass
+ *   over one diff; a scoper or researcher fans out over a whole codebase and
+ *   needs subagents to do it without exhausting its context.
+ * - `Skill` and `Monitor` are included, because these personas are expected to
+ *   invoke the repository's own skills (`/research`, `/to-spec`, `/grilling`).
+ * - `mcp__cyrus-tools` and `mcp__cyrus-docs` are included; a review only ever
+ *   needs `mcp__linear`.
+ *
+ * `mcp__linear` stays, for the same reason it stays for a review: a read-only
+ * persona must still claim its ticket, post its answer, and update the map.
+ * That is a write to the issue tracker, never to code.
+ *
+ * Pair this with {@link REVIEW_DISALLOWED_TOOLS} as the deny layer — a deny
+ * rule beats an allow rule, so the write tools stay blocked even when a
+ * repository merges its own `allowedTools` in.
+ */
+export const READONLY_CODE_TOOLS = [
+	// Read-only code access. `Glob` and `Grep` are the two the Slack default
+	// was missing, and the two an investigator cannot work without.
+	"Read",
+	"Glob",
+	"Grep",
+
+	// Read-only history inspection. `git`/`gh` subcommands are enumerated
+	// individually — `Bash(git:*)` would also permit `git push`/`git commit`.
+	"Bash(git log:*)",
+	"Bash(git diff:*)",
+	"Bash(git show:*)",
+	"Bash(git status:*)",
+	"Bash(git blame:*)",
+	"Bash(gh pr view:*)",
+	"Bash(gh pr diff:*)",
+
+	// Web
+	"WebFetch",
+	"WebSearch",
+
+	// Subagents + task lifecycle. Investigation fans out; these mutate task
+	// tracking only, never code.
+	"Task",
+	"TaskCreate",
+	"TaskUpdate",
+	"TaskGet",
+	"TaskList",
+	"TaskOutput",
+	"TaskStop",
+
+	// Discovery — `Skill` is what lets a persona defer to the repository's own
+	// `/research`, `/to-spec` or `/grilling` skill instead of improvising.
+	"Skill",
+	"ToolSearch",
+	"Monitor",
+
+	// Workspace MCP servers — read the issue, post the answer, update the map.
+	"mcp__linear",
+	"mcp__cyrus-tools",
+	"mcp__cyrus-docs",
+] as const;
+
+/**
  * Tools explicitly denied to `reviewOnStatus` review sessions.
  *
  * Belt and braces on top of {@link REVIEW_ALLOWED_TOOLS}: a deny rule wins

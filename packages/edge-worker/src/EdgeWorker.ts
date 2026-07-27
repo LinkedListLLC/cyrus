@@ -5265,6 +5265,8 @@ ${taskSection}`;
 				| "scoper"
 				| "orchestrator"
 				| "graphite-orchestrator"
+				| "wayfinder"
+				| "wayfinder-task"
 				| undefined;
 
 			if (!isMentionTriggered || isLabelBasedPromptRequested) {
@@ -6133,7 +6135,9 @@ ${taskSection}`;
 					| "builder"
 					| "scoper"
 					| "orchestrator"
-					| "graphite-orchestrator";
+					| "graphite-orchestrator"
+					| "wayfinder"
+					| "wayfinder-task";
 		  }
 		| undefined
 	> {
@@ -7321,7 +7325,9 @@ ${input.userComment}
 			| "builder"
 			| "scoper"
 			| "orchestrator"
-			| "graphite-orchestrator",
+			| "graphite-orchestrator"
+			| "wayfinder"
+			| "wayfinder-task",
 	): string[] {
 		return this.toolPermissionResolver.buildDisallowedTools(
 			repositories,
@@ -7340,7 +7346,9 @@ ${input.userComment}
 			| "builder"
 			| "scoper"
 			| "orchestrator"
-			| "graphite-orchestrator",
+			| "graphite-orchestrator"
+			| "wayfinder"
+			| "wayfinder-task",
 	): string[] {
 		return this.toolPermissionResolver.buildAllowedTools(
 			repositories,
