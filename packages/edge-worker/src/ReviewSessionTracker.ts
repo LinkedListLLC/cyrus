@@ -295,12 +295,25 @@ export class ReviewSessionTracker {
 	 * shape — Linear created the session *before* telling us, so the id is known
 	 * up front and there is no mint to race.
 	 *
-	 * This records the claim directly and deliberately leaves the per-issue
-	 * pending/active state untouched, so a concurrent status-triggered mint on
-	 * the same issue is neither clobbered nor stranded on a settled promise.
+	 * This records the claim directly and marks the issue as having a review in
+	 * flight, keyed to this session id. The in-flight mark is what makes the two
+	 * triggers mutually exclusive: a later `reviewOnStatus` transition on the
+	 * same issue sees {@link hasReviewInFlight} and declines rather than starting
+	 * a second, concurrent review of the same PR. The mark is released by
+	 * {@link completeReview} when this session finishes.
+	 *
+	 * It deliberately does not touch the per-issue *pending* state, so it cannot
+	 * strand a concurrent status-triggered mint on a settled promise. A status
+	 * mint that is already underway will have registered its own in-flight mark
+	 * via {@link beginReview}, which the delegation path checks before adopting —
+	 * so the two never race to clobber each other's mark in practice.
 	 */
-	adoptReviewSession(sessionId: string): void {
+	adoptReviewSession(sessionId: string, issueId: string): void {
 		this.rememberClaimed(sessionId);
+		this.activeByIssue.set(issueId, {
+			sessionId,
+			expiresAt: this.now() + this.activeTtlMs,
+		});
 	}
 
 	/**
