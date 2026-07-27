@@ -78,7 +78,7 @@ Matching is case-insensitive on the label name. The file hot-reloads — no rede
   "id": "job-boards",
   "labelPrompts": {
     "wayfinder":      { "labels": ["wayfinder:map", "wayfinder:research", "wayfinder:grilling"], "allowedTools": "readOnly" },
-    "wayfinder-task": { "labels": ["wayfinder:task", "wayfinder:prototype"], "allowedTools": "safe" },
+    "wayfinder-task": { "labels": ["wayfinder:task", "wayfinder:prototype"], "allowedTools": "all" },
     "debugger":       { "labels": ["Bug"] },
     "builder":        { "labels": ["Feature"] },
     "scoper":         { "labels": ["Scoper"], "allowedTools": "readOnly" },
@@ -90,16 +90,45 @@ Matching is case-insensitive on the label name. The file hot-reloads — no rede
 Global fallbacks for any persona go in `promptDefaults` at the top level of the config, keyed by
 the same names.
 
+**Deployed state (2026-07-27).** All three repositories in the self-hosted instance — `cyrus`,
+`SalonPrive`, `job-boards` — carry exactly the two Wayfinder keys above and no `appendInstruction`.
+The `scoper` / `builder` / `orchestrator` entries that previously held the `wayfinder:*` labels
+were removed with them, so those three personas are currently unrouted; they are reachable again
+by giving them their own labels. Verified by reading the live `config.json`, not inferred.
+
 ### Tool presets
 
 `allowedTools` accepts a preset string or a verbatim array. The presets:
 
-| Preset | Resolves to |
-|---|---|
-| `readOnly` | `READONLY_CODE_TOOLS` (cyrus-core) |
-| `safe` | `getSafeTools()` (cyrus-claude-runner) |
-| `all` | `getAllTools()` |
-| `coordinator` | `getCoordinatorTools()` |
+| Preset | Resolves to | Has `Bash`? |
+|---|---|---|
+| `readOnly` | `READONLY_CODE_TOOLS` (cyrus-core) | narrowed — read-only `git`/`gh` only |
+| `safe` | `getSafeTools()` (cyrus-claude-runner) | **no** |
+| `all` | `getAllTools()` | yes |
+| `coordinator` | `getCoordinatorTools()` | yes |
+
+> ### ⚠️ `safe` means "no shell", not "sensible default"
+>
+> `getSafeTools()` is literally `availableTools.filter(t => t !== "Bash")`. A persona configured
+> `safe` can edit files and then has **no way to run the tests, the linter, `git`, or
+> `gh pr create`** — it can write code and cannot verify or ship it.
+>
+> This is [CYR-21](https://linear.app/linkedlist/issue/CYR-21). It was latent until PR #8 made the
+> SDK `tools` option derive from `allowedTools`; before that a `safe` session kept `Bash` by
+> accident, so the preset's name was never tested against its behaviour. **Any persona that has to
+> *do* something wants `all`, not `safe`** — the deployed config uses `all` for exactly this reason.
+>
+> `safe` is only right for a persona that produces text and nothing else — and for those,
+> `readOnly` is usually the better answer, because it grants the narrow read-only `git`/`gh`
+> commands an investigator actually needs.
+
+**MCP tools are not affected by the preset.** None of `getAllTools()` / `getSafeTools()` contains
+an `mcp__` entry, which looks like it would leave a Wayfinder persona unable to claim its ticket.
+It does not, for three separate reasons: `deriveBuiltInTools` skips `mcp__` entries outright (*"MCP
+tools are not governed by `tools`"*, `built-in-tool-restrictions.ts:178`); `canUseTool` intercepts
+only restricted `Bash` and `AskUserQuestion`, returning `allow` for everything else; and
+`deriveBuiltInDisallowedTools` never emits an `mcp__` deny rule. `READONLY_CODE_TOOLS` lists the
+prefixes explicitly anyway, so the read-only path does not rely on that reasoning.
 
 **`readOnly` changed in CYR-37.** It previously resolved to `SLACK_DEFAULT_ALLOWED_TOOLS` — the
 Slack *chat* toolset, which has no `Grep`, no `Glob`, and no git inspection commands. A `scoper`
@@ -173,8 +202,14 @@ likely to be violated are enforced by configuration rather than by prose:
 | `wayfinder:map` | `wayfinder` | `readOnly` | Charting is a human act |
 | `wayfinder:research` | `wayfinder` | `readOnly` | Research must not implement |
 | `wayfinder:grilling` | `wayfinder` | `readOnly` | "A grilling agent that answers its own questions has broken this" |
-| `wayfinder:task` | `wayfinder-task` | `safe` | The one ticket type that *does* |
-| `wayfinder:prototype` | `wayfinder-task` | `safe` | Needs to build the throwaway artifact |
+| `wayfinder:task` | `wayfinder-task` | `all` | The one ticket type that *does* |
+| `wayfinder:prototype` | `wayfinder-task` | `all` | Needs to build the throwaway artifact |
+
+**`wayfinder-task` is `all`, not `safe`** — see the CYR-21 warning under *Tool presets*. A task
+ticket's whole purpose is to *do* the thing that unblocks a decision: provision the access, move
+the data, stand up the rough prototype. `safe` withholds `Bash`, so such a session could not run a
+single command. This document said `safe` when it was first written; the deployed config was
+already `all`, and reading the live config before applying it is what caught the discrepancy.
 
 Both prompts carry the same protocol:
 
