@@ -157,10 +157,14 @@ Build the payment integration
 		expect(typeof result.systemPrompt).toBe("string");
 		expect(result.systemPrompt?.length).toBeGreaterThan(0);
 
-		// Check for label-based (builder) prompt content
+		// Check for label-based (builder) prompt content. Anchored on the
+		// version tag and the output contract rather than on prose: CYR-37
+		// rewrote this prompt, and the previous anchors ("Task tool", the
+		// `<builder_specific_instructions>` block) were the Task-tool mandate
+		// that rewrite deliberately deleted.
 		expect(result.systemPrompt).toContain("builder");
-		expect(result.systemPrompt).toContain("Task tool");
-		expect(result.systemPrompt).toContain("<builder_specific_instructions>");
+		expect(result.systemPrompt).toContain('<version-tag value="builder-v');
+		expect(result.systemPrompt).toContain("## Output format");
 
 		// Verify todolist-system-prompt-extension instructions are NOT included in label-based prompts
 		// Check for unique content from todolist-system-prompt-extension that won't be in builder prompt

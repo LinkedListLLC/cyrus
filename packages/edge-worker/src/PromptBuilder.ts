@@ -37,7 +37,9 @@ export interface SystemPromptResult {
 		| "builder"
 		| "scoper"
 		| "orchestrator"
-		| "graphite-orchestrator";
+		| "graphite-orchestrator"
+		| "wayfinder"
+		| "wayfinder-task";
 }
 
 /**
@@ -239,8 +241,18 @@ export class PromptBuilder {
 			}
 		}
 
-		// Check each prompt type for matching labels
+		// Check each prompt type for matching labels.
+		//
+		// ORDER IS SIGNIFICANT — first match wins, and an issue routinely carries
+		// more than one of these labels. The Wayfinder pair comes first because a
+		// `wayfinder:*` label describes *how the session must behave* (plan, do
+		// not build; one ticket; never self-answer), which has to beat a label
+		// that merely describes the subject matter. A ticket labelled both `Bug`
+		// and `wayfinder:research` is a research question about a bug, not a
+		// licence to start fixing it.
 		const promptTypes = [
+			"wayfinder",
+			"wayfinder-task",
 			"debugger",
 			"builder",
 			"scoper",
