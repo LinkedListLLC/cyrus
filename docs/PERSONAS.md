@@ -227,6 +227,35 @@ Both prompts carry the same protocol:
 These rules previously lived in a ~1,200-character `appendInstruction` string duplicated into every
 repository's config entry. They now live in the personas, and that string can be deleted.
 
+## Checking a config: `cyrus personas`
+
+Run it wherever a real `config.json` lives — in the container that is
+`/root/.cyrus/config.json`. It answers "which persona would this issue get, and what tools would
+it have?" by putting a label set through the **real** `PromptBuilder` and `ToolPermissionResolver`,
+not a second copy of the rules.
+
+```bash
+cyrus personas                            # matrix over every configured label, plus the no-label case
+cyrus personas "Bug,wayfinder:research"   # one label set
+cyrus personas --repo job-boards          # narrow to one repository
+cyrus personas --json                     # machine-readable
+```
+
+For each combination it prints the persona, prompt file, version tag, whether the session can
+write, whether it has a shell, and the tool counts.
+
+**It raises two warnings, and both are defects that actually shipped:**
+
+- **A persona that can write but has no shell.** This is the `safe` preset trap described above — a
+  session that can edit files and then cannot run the tests, the linter, `git`, or `gh`. Set
+  `wayfinder-task` to `safe` and this fires immediately; that is the four-day discrepancy the
+  command exists to make visible.
+- **A prompt file with no `<version-tag>`**, whose sessions therefore log no `systemPromptVersion`
+  — the `scoper.md` defect.
+
+The value is that it reads the **deployed** config. A dry-run against a hard-coded fixture would
+have agreed with this document and missed the drift, which is exactly what happened.
+
 ## Modules touched
 
 | File | Change |

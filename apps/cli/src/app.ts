@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import { Application } from "./Application.js";
 import { AuthCommand } from "./commands/AuthCommand.js";
 import { CheckTokensCommand } from "./commands/CheckTokensCommand.js";
+import { PersonasCommand } from "./commands/PersonasCommand.js";
 import { RefreshTokenCommand } from "./commands/RefreshTokenCommand.js";
 import { SelfAddRepoCommand } from "./commands/SelfAddRepoCommand.js";
 import { SelfAuthCommand } from "./commands/SelfAuthCommand.js";
@@ -161,6 +162,34 @@ program
 				args.push("-b", cmdOpts.baseBranch);
 			}
 			await new SelfAddRepoCommand(app).execute(args);
+		},
+	);
+
+// Personas command - dry-run label -> persona + tool resolution
+program
+	.command("personas [labels]")
+	.description(
+		'Show which persona and tools a set of issue labels resolves to, against the live config.json. Labels are comma-separated (e.g. "Bug,wayfinder:research"). With no labels, prints a matrix over every configured label.',
+	)
+	.option("-r, --repo <id>", "Only show results for this repository id or name")
+	.option("--json", "Emit machine-readable JSON")
+	.action(
+		async (
+			labels: string | undefined,
+			cmdOpts: { repo?: string; json?: boolean },
+		) => {
+			const opts = program.opts();
+			const app = new Application(
+				opts.cyrusHome,
+				opts.envFile,
+				packageJson.version,
+				errorReporter,
+			);
+			const args: string[] = [];
+			if (labels) args.push(labels);
+			if (cmdOpts.repo) args.push("--repo", cmdOpts.repo);
+			if (cmdOpts.json) args.push("--json");
+			await new PersonasCommand(app).execute(args);
 		},
 	);
 
