@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Write all user-facing output in ASD-STE100 Simplified Technical English (Issue 9, Jan 2025)** — chat replies, PR and commit bodies, and docs written for a human reader: approved words in their approved meaning, active voice, one instruction per sentence, ≤20 words in procedural sentences and ≤25 in descriptive ones; code, identifiers, technical names, and product UI/marketing copy are exempt.
+
 ## Project Overview
 
 Cyrus (Linear Claude Agent) is a monorepo JavaScript/TypeScript application that integrates Linear's issue tracking with Anthropic's Claude Code to automate software development tasks. The project is transitioning to an edge-proxy architecture that separates OAuth/webhook handling (proxy) from Claude processing (edge workers).
