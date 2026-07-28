@@ -1,5 +1,6 @@
 import { getCyrusAppUrl } from "cyrus-cloudflare-tunnel-client";
 import type {
+	EdgeConfig,
 	EdgeWorkerConfig,
 	Issue,
 	RepoSetupHookEventHandler,
@@ -12,6 +13,71 @@ import { DEFAULT_SERVER_PORT, parsePort } from "../config/constants.js";
 import type { Workspace } from "../config/types.js";
 import type { ConfigService } from "./ConfigService.js";
 import type { Logger } from "./Logger.js";
+
+/**
+ * Parse a comma-separated tool list from an environment variable.
+ *
+ * Returns `undefined` when the variable is unset, empty, or contains only
+ * blanks — never an empty (or blank-only) array. `"".split(",")` yields
+ * `[""]`, which is both truthy and a bogus one-entry tool list, so the naive
+ * `env?.split(",")` form turns `LINEAR_ALLOWED_TOOLS=""` into "allow exactly
+ * one tool named empty-string".
+ */
+export function parseToolListEnv(
+	value: string | undefined,
+): string[] | undefined {
+	if (value === undefined) return undefined;
+	const tools = value
+		.split(",")
+		.map((tool) => tool.trim())
+		.filter((tool) => tool.length > 0);
+	return tools.length > 0 ? tools : undefined;
+}
+
+/**
+ * Resolve the platform tool-permission fields of `EdgeWorkerConfig` from the
+ * environment and the on-disk edge config.
+ *
+ * Exported so the downstream resolution ladder can be exercised against the
+ * config the CLI actually builds rather than a hand-written literal — the
+ * shape of this object is the whole bug this function exists to prevent.
+ *
+ * **Every field is `undefined` when nothing is configured — never `[]`.**
+ * `ToolPermissionResolver` walks a priority ladder and treats a present
+ * `linearAllowedTools` as "the operator chose this list". An empty array is
+ * truthy, so it short-circuits the ladder one rung above the platform default
+ * and hands the session an empty allow-list. Since `tools` is derived from
+ * `allowedTools`, that resolves to a session with no tools at all.
+ */
+export function resolveToolPermissionConfig(
+	edgeConfig: Pick<
+		EdgeConfig,
+		| "linearAllowedTools"
+		| "slackAllowedTools"
+		| "githubAllowedTools"
+		| "defaultDisallowedTools"
+	>,
+	env: NodeJS.ProcessEnv = process.env,
+): Pick<
+	EdgeWorkerConfig,
+	| "linearAllowedTools"
+	| "slackAllowedTools"
+	| "githubAllowedTools"
+	| "defaultDisallowedTools"
+> {
+	return {
+		linearAllowedTools:
+			parseToolListEnv(env.LINEAR_ALLOWED_TOOLS) ??
+			edgeConfig.linearAllowedTools ??
+			undefined,
+		slackAllowedTools: edgeConfig.slackAllowedTools,
+		githubAllowedTools: edgeConfig.githubAllowedTools,
+		defaultDisallowedTools:
+			parseToolListEnv(env.DISALLOWED_TOOLS) ??
+			edgeConfig.defaultDisallowedTools ??
+			undefined,
+	};
+}
 
 /**
  * Service responsible for EdgeWorker and Cloudflare tunnel management
@@ -199,19 +265,10 @@ export class WorkerService {
 			version: this.version,
 			repositories,
 			cyrusHome: this.cyrusHome,
-			linearAllowedTools:
-				process.env.LINEAR_ALLOWED_TOOLS?.split(",").map((t) => t.trim()) ||
-				edgeConfig.linearAllowedTools ||
-				[],
-			slackAllowedTools: edgeConfig.slackAllowedTools,
-			githubAllowedTools: edgeConfig.githubAllowedTools,
+			...resolveToolPermissionConfig(edgeConfig),
 			slackMcpConfigs: edgeConfig.slackMcpConfigs,
 			linearMcpConfigs: edgeConfig.linearMcpConfigs,
 			githubMcpConfigs: edgeConfig.githubMcpConfigs,
-			defaultDisallowedTools:
-				process.env.DISALLOWED_TOOLS?.split(",").map((t) => t.trim()) ||
-				edgeConfig.defaultDisallowedTools ||
-				undefined,
 			// Model configuration: environment variables take precedence over config file.
 			// Legacy env vars/keys are still accepted for backwards compatibility.
 			claudeDefaultModel:
