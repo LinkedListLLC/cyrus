@@ -47,3 +47,7 @@ CLAUDE.local.md
 
 # Claude Code harness runtime artifacts
 .claude/scheduled_tasks.lock
+
+# Per-task git worktrees for delegated agents (each holds its own node_modules).
+.claude/worktrees/
+.claude/handoffs/
