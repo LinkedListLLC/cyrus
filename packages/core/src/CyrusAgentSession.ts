@@ -104,6 +104,15 @@ export interface CyrusAgentSession {
 		totalCostUsd?: number;
 		usage?: any;
 		commentId?: string;
+		/**
+		 * Marks a `reviewOnStatus` review session. The read-only posture must
+		 * survive the session: a follow-up comment resumes through
+		 * `resumeAgentSession`, which would otherwise rebuild the config with the
+		 * full builder toolset and a label-derived persona.
+		 */
+		readOnlyReview?: boolean;
+		/** The review system prompt, reused verbatim when the review is resumed. */
+		reviewSystemPrompt?: string;
 	};
 }
 

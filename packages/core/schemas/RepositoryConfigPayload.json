@@ -470,6 +470,9 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"reviewOnStatus": {
+			"type": "string"
 		}
 	},
 	"required": ["id", "name", "repositoryPath", "baseBranch"],

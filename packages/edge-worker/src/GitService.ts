@@ -40,6 +40,28 @@ export interface GitServiceOptions {
 	cyrusHome?: string;
 }
 
+export interface CreateReviewWorktreeOptions {
+	/** Repository whose PR head is being reviewed. */
+	repository: RepositoryConfig;
+	/** Unique id for this review (the Linear agent session id). */
+	reviewId: string;
+	/** Issue identifier, used only to make the directory name readable. */
+	issueIdentifier: string;
+	/** Branch under review (the PR head). */
+	branchName: string;
+}
+
+export interface ReviewWorktree {
+	/** Absolute path of the detached review checkout. */
+	path: string;
+	/** The ref that was actually checked out (e.g. `origin/feature-x`). */
+	checkoutRef: string;
+	/** Repository the worktree belongs to — needed to remove it later. */
+	repositoryPath: string;
+	/** True when the requested branch was not found and we fell back. */
+	usedFallbackRef: boolean;
+}
+
 export interface DeleteWorktreeOptions {
 	/**
 	 * Repositories involved with this issue's workspace. When provided, each
@@ -979,6 +1001,157 @@ export class GitService {
 				isGitWorktree: false,
 				resolvedBaseBranches: { [repository.id]: fallbackResolution },
 			};
+		}
+	}
+
+	/**
+	 * Create a throwaway, **detached** worktree at a PR head for a read-only review.
+	 *
+	 * This deliberately does not go through {@link createGitWorktree}: that path is
+	 * keyed by issue identifier and, when the branch already exists, hands back the
+	 * *builder's* worktree — which may be dirty, mid-edit, or ahead of the pushed
+	 * PR head. A review must judge what is actually up for merge.
+	 *
+	 * The checkout is detached (`git worktree add --detach`) for two reasons: the
+	 * review never commits, and detaching side-steps git's "branch is already
+	 * checked out in another worktree" guard, so a review can run while the builder
+	 * still holds the branch.
+	 *
+	 * Ref resolution: `origin/<branch>` (the pushed PR head) → local `<branch>` →
+	 * `origin/<baseBranch>` → local `<baseBranch>`. The fallback is reported back
+	 * via `usedFallbackRef` so the review can say what it is actually looking at.
+	 */
+	async createReviewWorktree(
+		options: CreateReviewWorktreeOptions,
+	): Promise<ReviewWorktree> {
+		const { repository, reviewId, issueIdentifier, branchName } = options;
+		const repoPath = repository.repositoryPath;
+
+		try {
+			execSync("git rev-parse --git-dir", { cwd: repoPath, stdio: "pipe" });
+		} catch {
+			throw new Error(`${repoPath} is not a git repository`);
+		}
+
+		// Fetch so `origin/<branch>` reflects the pushed PR head, not a stale copy.
+		try {
+			execSync("git fetch origin", { cwd: repoPath, stdio: "pipe" });
+		} catch (e) {
+			this.logger.warn(
+				`Review worktree: git fetch failed, using local refs: ${(e as Error).message}`,
+			);
+		}
+
+		const sanitizedBranch = this.sanitizeBranchName(branchName);
+		const candidates = [
+			`origin/${sanitizedBranch}`,
+			sanitizedBranch,
+			`origin/${repository.baseBranch}`,
+			repository.baseBranch,
+		];
+
+		let checkoutRef: string | undefined;
+		for (const candidate of candidates) {
+			try {
+				execSync(`git rev-parse --verify --quiet "${candidate}^{commit}"`, {
+					cwd: repoPath,
+					stdio: "pipe",
+				});
+				checkoutRef = candidate;
+				break;
+			} catch {
+				// Try the next candidate.
+			}
+		}
+
+		if (!checkoutRef) {
+			throw new Error(
+				`Could not resolve a ref to review for ${issueIdentifier}: tried ${candidates.join(", ")}`,
+			);
+		}
+
+		// Anything other than the pushed head is a fallback worth announcing —
+		// including the *local* branch. If `origin/<branch>` is gone because the
+		// PR was merged or the branch deleted, a stale local copy is not the pull
+		// request, and reviewing it silently would misrepresent what was read.
+		const usedFallbackRef = checkoutRef !== `origin/${sanitizedBranch}`;
+
+		// Session-scoped path — never the issue-keyed builder worktree. Sits under
+		// the repo's configured workspace dir so reviews land on whichever disk the
+		// operator chose for worktrees.
+		const reviewsDir = join(
+			repository.workspaceBaseDir || getDefaultWorktreesDir(this.cyrusHome),
+			"reviews",
+		);
+		// The full review id, not a prefix: two reviews of the same issue must never
+		// land in the same directory, and session ids can share a prefix.
+		const dirName = `${this.sanitizeBranchName(issueIdentifier)}-${this.sanitizeBranchName(reviewId)}`;
+		const workspacePath = join(reviewsDir, dirName);
+
+		// A retried review can collide with its own leftover directory.
+		if (existsSync(workspacePath)) {
+			this.removeReviewWorktree({
+				path: workspacePath,
+				checkoutRef,
+				repositoryPath: repoPath,
+				usedFallbackRef,
+			});
+		}
+
+		mkdirSync(reviewsDir, { recursive: true });
+
+		this.logger.info(
+			`Creating detached review worktree at ${workspacePath} from ${checkoutRef}`,
+		);
+		execSync(`git worktree add --detach "${workspacePath}" "${checkoutRef}"`, {
+			cwd: repoPath,
+			stdio: "pipe",
+		});
+
+		return {
+			path: workspacePath,
+			checkoutRef,
+			repositoryPath: repoPath,
+			usedFallbackRef,
+		};
+	}
+
+	/**
+	 * Remove a review worktree created by {@link createReviewWorktree}.
+	 *
+	 * Best-effort by design: a review that has already produced its verdict must
+	 * not fail because cleanup did. Failures are logged, the directory is removed
+	 * regardless, and stale git entries are pruned.
+	 */
+	removeReviewWorktree(worktree: ReviewWorktree): void {
+		try {
+			execSync(`git worktree remove --force "${worktree.path}"`, {
+				cwd: worktree.repositoryPath,
+				stdio: "pipe",
+				timeout: 30_000,
+			});
+		} catch (error) {
+			this.logger.warn(
+				`Failed to remove review worktree at ${worktree.path}: ${(error as Error).message}`,
+			);
+		}
+
+		try {
+			rmSync(worktree.path, { recursive: true, force: true });
+		} catch (error) {
+			this.logger.warn(
+				`Failed to delete review worktree directory ${worktree.path}: ${(error as Error).message}`,
+			);
+		}
+
+		try {
+			execSync("git worktree prune", {
+				cwd: worktree.repositoryPath,
+				stdio: "pipe",
+				timeout: 10_000,
+			});
+		} catch {
+			// Best-effort: prune failure is not critical.
 		}
 	}
 
