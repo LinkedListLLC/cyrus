@@ -377,6 +377,116 @@
 									}
 								]
 							},
+							"wayfinder": {
+								"anyOf": [
+									{
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									{
+										"type": "object",
+										"properties": {
+											"labels": {
+												"type": "array",
+												"items": {
+													"type": "string"
+												}
+											},
+											"allowedTools": {
+												"anyOf": [
+													{
+														"type": "array",
+														"items": {
+															"type": "string"
+														}
+													},
+													{
+														"type": "string",
+														"const": "readOnly"
+													},
+													{
+														"type": "string",
+														"const": "safe"
+													},
+													{
+														"type": "string",
+														"const": "all"
+													},
+													{
+														"type": "string",
+														"const": "coordinator"
+													}
+												]
+											},
+											"disallowedTools": {
+												"type": "array",
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"required": ["labels"],
+										"additionalProperties": false
+									}
+								]
+							},
+							"wayfinder-task": {
+								"anyOf": [
+									{
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									{
+										"type": "object",
+										"properties": {
+											"labels": {
+												"type": "array",
+												"items": {
+													"type": "string"
+												}
+											},
+											"allowedTools": {
+												"anyOf": [
+													{
+														"type": "array",
+														"items": {
+															"type": "string"
+														}
+													},
+													{
+														"type": "string",
+														"const": "readOnly"
+													},
+													{
+														"type": "string",
+														"const": "safe"
+													},
+													{
+														"type": "string",
+														"const": "all"
+													},
+													{
+														"type": "string",
+														"const": "coordinator"
+													}
+												]
+											},
+											"disallowedTools": {
+												"type": "array",
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"required": ["labels"],
+										"additionalProperties": false
+									}
+								]
+							},
 							"graphite": {
 								"anyOf": [
 									{
@@ -841,6 +951,82 @@
 					"additionalProperties": false
 				},
 				"graphite-orchestrator": {
+					"type": "object",
+					"properties": {
+						"allowedTools": {
+							"anyOf": [
+								{
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								{
+									"type": "string",
+									"const": "readOnly"
+								},
+								{
+									"type": "string",
+									"const": "safe"
+								},
+								{
+									"type": "string",
+									"const": "all"
+								},
+								{
+									"type": "string",
+									"const": "coordinator"
+								}
+							]
+						},
+						"disallowedTools": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						}
+					},
+					"additionalProperties": false
+				},
+				"wayfinder": {
+					"type": "object",
+					"properties": {
+						"allowedTools": {
+							"anyOf": [
+								{
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								{
+									"type": "string",
+									"const": "readOnly"
+								},
+								{
+									"type": "string",
+									"const": "safe"
+								},
+								{
+									"type": "string",
+									"const": "all"
+								},
+								{
+									"type": "string",
+									"const": "coordinator"
+								}
+							]
+						},
+						"disallowedTools": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						}
+					},
+					"additionalProperties": false
+				},
+				"wayfinder-task": {
 					"type": "object",
 					"properties": {
 						"allowedTools": {
