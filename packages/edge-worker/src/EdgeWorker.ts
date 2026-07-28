@@ -3201,12 +3201,29 @@ ${taskSection}`;
 			} else if (isIssueDeletedWebhook(webhook)) {
 				// Issue deletion also handled via message bus — same cleanup as terminal state.
 				return;
-			} else if (isIssueTitleOrDescriptionUpdateWebhook(webhook)) {
-				// Handle issue title/description/attachments updates - feed changes into active session
-				await this.handleIssueContentUpdate(webhook);
-			} else if (isIssueStateIdUpdateWebhook(webhook)) {
-				// Handle issue state changes — wake up parked sessions when blocking issues complete
-				await this.handleIssueStateChange(webhook);
+			} else if (
+				isIssueTitleOrDescriptionUpdateWebhook(webhook) ||
+				isIssueStateIdUpdateWebhook(webhook)
+			) {
+				// NOT an either/or, and it used to be. Linear packs *every* field
+				// changed by one save into a single `updatedFrom`, so one webhook is
+				// routinely both a content update and a state change — renaming an
+				// issue as you move it to In Review is one save, one webhook.
+				//
+				// These were two `else if` branches with the content predicate first.
+				// First match wins, so any state change bundled with a title,
+				// description or attachment change was handed to the content handler
+				// and never reached the state handler. Reordering only moves the
+				// dropped path onto the other handler; the concerns are independent,
+				// so both run.
+				if (isIssueTitleOrDescriptionUpdateWebhook(webhook)) {
+					// Feed title/description/attachment changes into an active session.
+					await this.handleIssueContentUpdate(webhook);
+				}
+				if (isIssueStateIdUpdateWebhook(webhook)) {
+					// Wake parked sessions when a blocking issue completes.
+					await this.handleIssueStateChange(webhook);
+				}
 			} else {
 				if (process.env.CYRUS_WEBHOOK_DEBUG === "true") {
 					this.logger.debug(
