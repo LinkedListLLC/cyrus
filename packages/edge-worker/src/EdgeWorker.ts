@@ -8,6 +8,7 @@ import { LinearClient } from "@linear/sdk";
 import type {
 	McpServerConfig,
 	SDKMessage,
+	SDKResultMessage,
 	SessionStore,
 	WarmQuery,
 } from "cyrus-claude-runner";
@@ -209,6 +210,32 @@ type CyrusToolsMcpContext = {
 };
 
 /**
+ * How the Claude CLI reports that it cannot find the conversation it was
+ * asked to resume, for example:
+ * "No conversation found with session ID: 48614c4d-0cb5-4c32-97e2-67e3c6b2f33c".
+ */
+const MISSING_CONVERSATION_PATTERN = /No conversation found with session ID/i;
+
+/**
+ * True when a result message says the resumed conversation is gone. The text
+ * sits in `result` for some runners and in `errors` for others, so read both.
+ */
+function isMissingConversationResult(message: SDKResultMessage): boolean {
+	if (!message.is_error) return false;
+
+	const parts: string[] = [];
+	if ("result" in message && typeof message.result === "string") {
+		parts.push(message.result);
+	}
+	const errors = (message as { errors?: unknown }).errors;
+	if (Array.isArray(errors)) {
+		parts.push(...errors.map((entry) => String(entry)));
+	}
+
+	return parts.some((part) => MISSING_CONVERSATION_PATTERN.test(part));
+}
+
+/**
  * Unified edge worker that **orchestrates**
  *   capturing Linear webhooks,
  *   managing Claude Code processes, and
@@ -221,6 +248,8 @@ export class EdgeWorker extends EventEmitter {
 	private activitySinks: Map<string, IActivitySink> = new Map(); // Maps Linear workspace ID to activity sink (one per workspace, mirrors issueTrackers)
 	private sessionRepositories: Map<string, string> = new Map(); // Maps session ID to repository ID
 	private lastStopTimeBySession: Map<string, number> = new Map(); // Maps session ID to timestamp of last stop signal (for double-stop detection)
+	private staleResumeRecoveryBySession: Map<string, () => Promise<void>> =
+		new Map(); // Maps session ID to a one-shot retry for the in-flight resume, used when the agent CLI has lost the conversation
 	private warmInstances: Map<string, WarmQuery> = new Map(); // Pre-warmed Claude sessions keyed by agentSessionId
 	private issueTrackers: Map<string, IIssueTrackerService> = new Map(); // one issue tracker per Linear workspace (keyed by linearWorkspaceId)
 	private linearEventTransport: LinearEventTransport | null = null; // Single event transport for webhook delivery
@@ -5992,7 +6021,61 @@ ${taskSection}`;
 		message: SDKMessage,
 		_repositoryId: string,
 	): Promise<void> {
+		if (await this.recoverFromStaleResume(sessionId, message)) {
+			return;
+		}
 		await this.agentSessionManager.handleClaudeMessage(sessionId, message);
+	}
+
+	/**
+	 * Restart the turn when the agent CLI reports that the conversation we
+	 * asked it to resume no longer exists.
+	 *
+	 * A session that is killed mid-turn (a stop signal, a crash) can die
+	 * before the CLI writes its transcript. The conversation ID stays on the
+	 * Cyrus session, so every later prompt resumes an ID the CLI cannot find
+	 * and the error result is all the user gets — forever (CYR-53). Replay the
+	 * prompt as a fresh session instead, and keep the raw error off the
+	 * timeline because the work is not lost.
+	 *
+	 * @returns true when the message was consumed here and must not go on to
+	 *   the session manager.
+	 */
+	private async recoverFromStaleResume(
+		sessionId: string,
+		message: SDKMessage,
+	): Promise<boolean> {
+		if (message.type !== "result") return false;
+
+		const recover = this.staleResumeRecoveryBySession.get(sessionId);
+		if (!recover) return false;
+
+		// One result per turn settles the question, so the retry never
+		// outlives the resume that registered it.
+		this.staleResumeRecoveryBySession.delete(sessionId);
+
+		if (!isMissingConversationResult(message)) return false;
+
+		const log = this.logger.withContext({ sessionId });
+		log.warn(
+			`The agent has no conversation for the resumed session ID — starting a fresh session with the full issue context`,
+		);
+
+		try {
+			await this.agentSessionManager.createThoughtActivity(
+				sessionId,
+				"My earlier conversation is no longer available — it ended before it could be saved. I am starting again with the full issue context.",
+			);
+			await recover();
+		} catch (error) {
+			log.error(
+				`Failed to restart the session after a lost conversation:`,
+				error,
+			);
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
@@ -6013,6 +6096,18 @@ ${taskSection}`;
 		if (isAbortError || isSigterm) {
 			return;
 		}
+
+		// The SDK throws this straight after the error result that
+		// `recoverFromStaleResume` already acted on. It is a known, recovered
+		// condition, so keep it out of the error reporter.
+		if (MISSING_CONVERSATION_PATTERN.test(error.message)) {
+			this.logger.warn(
+				"Claude has no conversation for the resumed session ID:",
+				error.message,
+			);
+			return;
+		}
+
 		this.logger.error("Unhandled claude error:", error);
 	}
 
@@ -8064,6 +8159,38 @@ ${input.userComment}
 		console.log(
 			`[resumeAgentSession] needsNewSession=${needsNewSession}, resumeSessionId=${resumeSessionId ?? "none"}`,
 		);
+
+		// An agent CLI can lose the conversation behind `resumeSessionId` — a
+		// session killed mid-turn never writes its transcript, so every later
+		// resume fails with "No conversation found with session ID" and the
+		// session dead-ends (CYR-53). Keep a one-shot retry that replays this
+		// same prompt as a fresh session, with the full issue context back in
+		// it. `handleClaudeMessage` runs it if that error arrives.
+		if (resumeSessionId) {
+			this.staleResumeRecoveryBySession.set(sessionId, async () => {
+				// The runner is still mid-unwind when its final result arrives,
+				// so `resumeAgentSession` would read it as live and push the
+				// prompt into a stream nobody reads. Take it off first.
+				agentSessionManager.detachAgentRunner(sessionId);
+				agentSessionManager.clearRunnerSessionIds(sessionId);
+				await this.resumeAgentSession(
+					session,
+					repository,
+					sessionId,
+					agentSessionManager,
+					promptBody,
+					attachmentManifest,
+					true, // The conversation is gone, so this really is a new session
+					additionalAllowedDirectories,
+					linearWorkspaceId,
+					maxTurns,
+					commentAuthor,
+					commentTimestamp,
+				);
+			});
+		} else {
+			this.staleResumeRecoveryBySession.delete(sessionId);
+		}
 
 		// Create runner configuration
 		// buildAgentRunnerConfig determines runner type from labels for new sessions
