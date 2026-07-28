@@ -2,6 +2,7 @@ import { getAllTools } from "cyrus-claude-runner";
 import type { EdgeWorkerConfig, ILogger, RepositoryConfig } from "cyrus-core";
 import {
 	LINEAR_DEFAULT_ALLOWED_TOOLS,
+	READONLY_CODE_TOOLS,
 	SLACK_DEFAULT_ALLOWED_TOOLS,
 } from "cyrus-core";
 import { describe, expect, it } from "vitest";
@@ -190,12 +191,12 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 				undefined,
 			);
 
-			expect(allowed).toEqual([...SLACK_DEFAULT_ALLOWED_TOOLS]);
+			expect(allowed).toEqual([...READONLY_CODE_TOOLS]);
 		});
 	});
 
 	describe("no regressions on the label-prompt rungs", () => {
-		it('scoper with allowedTools "readOnly" resolves 20 -> 18, Bash present, Write/Edit absent', () => {
+		it('scoper with allowedTools "readOnly" can search the codebase it is scoping', () => {
 			const { allowed } = resolve(
 				makeEdgeWorkerConfig(),
 				makeRepository({
@@ -206,7 +207,27 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 				"scoper",
 			);
 
-			expect(allowed).toHaveLength(20);
+			expect(allowed).toEqual([...READONLY_CODE_TOOLS]);
+
+			// CYR-37: the whole point of repointing the preset. Before, `readOnly`
+			// resolved to the Slack *chat* list, which has neither of these — so a
+			// scoper could only read paths it already knew the names of.
+			expect(allowed).toContain("Bash(git log:*)");
+
+			// Still read-only, and still able to write back to the issue tracker.
+			expect(allowed).toContain("mcp__linear");
+		});
+
+		it("the readOnly preset grants no unnarrowed Bash and no mutating git", () => {
+			// `Bash` appears in the derived built-in set because narrowed
+			// `Bash(...)` entries imply it, but the allow-list itself must never
+			// carry a bare `Bash` or a `Bash(git:*)` wildcard that would also
+			// permit `git push` / `git commit`.
+			expect(READONLY_CODE_TOOLS).not.toContain("Bash");
+			for (const entry of READONLY_CODE_TOOLS) {
+				expect(entry).not.toBe("Bash(git:*)");
+				expect(entry).not.toBe("Bash(gh:*)");
+			}
 		});
 
 		it('builder with allowedTools "all" resolves 29 -> 31 with Bash/Write/Edit', () => {
