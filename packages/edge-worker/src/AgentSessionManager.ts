@@ -1366,9 +1366,63 @@ export class AgentSessionManager extends EventEmitter {
 			return;
 		}
 
+		// A new runner means a new turn, so any stop request still on file
+		// belongs to the turn that was killed. That turn never consumed the
+		// flag: the full-stop path aborts the runner, and an aborted runner
+		// emits no result message. Left in place, the flag makes
+		// `completeSession` treat THIS turn's result as a user stop, skip the
+		// terminal activity, and leave the Linear panel spinning (CYR-53).
+		if (this.stopRequestedSessions.delete(sessionId)) {
+			log.debug(`Cleared a stop request left over from the previous turn`);
+		}
+
 		session.agentRunner = agentRunner;
 		session.updatedAt = Date.now();
 		log.debug(`Added agent runner`);
+	}
+
+	/**
+	 * Stop the session's runner and take it off the session.
+	 *
+	 * A runner is still "running" while it emits its final result message, so
+	 * code that reacts to that message and then restarts the session would
+	 * otherwise mistake the dying runner for a live one and push the new
+	 * prompt into a stream nobody reads.
+	 */
+	detachAgentRunner(sessionId: string): void {
+		const session = this.sessions.get(sessionId);
+		if (!session?.agentRunner) return;
+
+		const log = this.sessionLog(sessionId);
+		try {
+			session.agentRunner.stop();
+		} catch (error) {
+			log.debug(`Runner had already stopped`, error);
+		}
+		session.agentRunner = undefined;
+		session.updatedAt = Date.now();
+		log.debug(`Detached agent runner`);
+	}
+
+	/**
+	 * Forget the runner-side conversation IDs for a session.
+	 *
+	 * Call this when the agent CLI reports that it no longer holds the
+	 * conversation (for example after a kill that stopped it from writing the
+	 * transcript). Without this the same dead ID is resumed on every later
+	 * prompt and the session can never recover.
+	 */
+	clearRunnerSessionIds(sessionId: string): void {
+		const session = this.sessions.get(sessionId);
+		if (!session) return;
+
+		session.claudeSessionId = undefined;
+		session.geminiSessionId = undefined;
+		session.codexSessionId = undefined;
+		session.cursorSessionId = undefined;
+		session.grokSessionId = undefined;
+		session.updatedAt = Date.now();
+		this.sessionLog(sessionId).debug(`Cleared runner session IDs`);
 	}
 
 	/**
