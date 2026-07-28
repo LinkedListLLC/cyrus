@@ -4022,6 +4022,45 @@ ${taskSection}`;
 			return;
 		}
 
+		// The `Issue` webhook subscription fans EVERY state change in the
+		// workspace into this handler, but it has only two jobs: start a
+		// `reviewOnStatus` review, and wake parked sessions that this issue was
+		// blocking. Neither applies to the overwhelming majority of issues, and
+		// both predicates are answerable from in-memory state — so settle them
+		// BEFORE paying for a `fetchIssue` round-trip. Without this short-circuit
+		// every workspace-wide state change costs one Linear API call.
+		//
+		// NB: do NOT gate on `resolveRepositoryForIssue` alone. A *blocker* can be
+		// any issue in the workspace, including one Cyrus has never worked and
+		// that routes to no repository — that is exactly the parked-session path,
+		// and it is the reason the fetch exists at all.
+		const repository = this.resolveRepositoryForIssue(completedIssueId);
+		const repoWantsStatusReview = Boolean(repository?.reviewOnStatus?.trim());
+		const blocksParkedSession = this.isBlockingParkedSession(completedIssueId);
+		if (!repoWantsStatusReview && !blocksParkedSession) {
+			// Logged at INFO, and only when some repository actually wants reviews.
+			//
+			// This is the most likely place for a review to die: an issue Cyrus has
+			// never worked resolves to no repository at all. Silence here is
+			// indistinguishable from the feature not existing, which is how the
+			// trigger went five attempts without a diagnosis.
+			//
+			// The guard keeps this quiet on deployments that do not use the
+			// feature — otherwise the `Issue` subscription, which fans every state
+			// change in the workspace through here, would make this the noisiest
+			// line in the log.
+			if (this.repositoriesAwaitingReviewTrigger().length > 0) {
+				this.logger.info(
+					`No review for ${issueIdentifier}: ${
+						repository
+							? `repository '${repository.name}' has no reviewOnStatus configured`
+							: "no session has ever run for this issue on this instance, so it resolves to no repository"
+					}, and it is not blocking a parked session.`,
+				);
+			}
+			return;
+		}
+
 		// Fetch the issue to check its current state type
 		let stateType: string | undefined;
 		let stateName: string | undefined;
@@ -4044,7 +4083,6 @@ ${taskSection}`;
 		}
 
 		if (stateName) {
-			const repository = this.resolveRepositoryForIssue(completedIssueId);
 			if (matchesReviewStatus(repository?.reviewOnStatus, stateName)) {
 				this.logger.warn(
 					`reviewOnStatus is configured as "${repository?.reviewOnStatus}" for ${repository?.name}, but that is a ${stateType} state — reviews are not started for terminal states (the issue's sessions and worktrees are torn down there).`,
@@ -4129,6 +4167,21 @@ ${taskSection}`;
 	 * not re-run routing: a status transition carries no routing signal beyond
 	 * what the original session already established.
 	 */
+	/**
+	 * Is this issue an unresolved blocker for any parked session?
+	 *
+	 * In-memory only — deliberately does no I/O so `handleIssueStateChange` can
+	 * decide whether a state change is relevant before spending a `fetchIssue`.
+	 * A blocker can be any workspace issue, including one that routes to no
+	 * repository, so this is checked independently of repository resolution.
+	 */
+	private isBlockingParkedSession(issueId: string): boolean {
+		for (const parked of this.parkedSessions.values()) {
+			if (parked.blockingIssueIds.includes(issueId)) return true;
+		}
+		return false;
+	}
+
 	private resolveRepositoryForIssue(issueId: string): RepositoryConfig | null {
 		const cached = this.getCachedRepository(issueId);
 		if (cached) return cached;
