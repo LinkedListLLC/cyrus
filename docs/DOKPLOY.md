@@ -16,8 +16,45 @@ on port **3456**.
 | **Env vars / secrets** (`LINEAR_*`, `ANTHROPIC_API_KEY`, `CYRUS_BASE_URL`, `GH_TOKEN`, …) | Dokploy **Environment** panel | Cyrus reads `process.env` directly — the env page is enough. **No `.env` file mount needed.** |
 | **State**: Linear OAuth token (in `config.json` → `linearWorkspaces`), cloned repos, worktrees, deployed skills | A named **Volume Mount** at `/root/.cyrus` | Any non-mounted path is **wiped on every redeploy**. This mount is **required**. |
 | **`config.json`** (repos, routing, `allowedTools`, modes) | Created inside the volume by `cyrus self-add-repo`, then editable there (hot-reloaded) | Cyrus *writes* to `config.json`, so a File Mount (single-file, read-mostly) is the wrong tool — use the volume. |
+| **Claude conversation transcripts** (what a session needs to resume) | `CLAUDE_CONFIG_DIR=/root/.cyrus/claude`, set in the Dockerfile | Claude Code defaults to `/root/.claude`, outside the volume. See below. |
 
 **You do not need Dokploy's File Mount feature.** Environment panel + one volume covers everything.
+
+### Why `CLAUDE_CONFIG_DIR` points into the volume
+
+Claude Code stores every conversation at
+`<config-dir>/projects/<sanitized-cwd>/<session-id>.jsonl`. Cyrus resumes a
+Linear session by passing that session ID back to the CLI.
+
+The two halves used to live in different places: Cyrus kept the session ID in
+the volume, while Claude kept the transcript on the ephemeral layer. A redeploy
+deleted the transcripts but not the IDs, so afterwards Cyrus asked for
+conversations the CLI could no longer find. Every Linear session open at the
+time of the redeploy failed with `No conversation found with session ID` and
+could never answer again ([CYR-53](https://linear.app/linkedlist/issue/CYR-53)).
+
+Pointing `CLAUDE_CONFIG_DIR` into the volume keeps both halves together. It
+moves the whole store, including the top-level `.claude.json` that otherwise
+sits beside the directory. Worktrees are already in the volume at
+`/root/.cyrus/worktrees`, so the paths that key each project directory stay the
+same across redeploys and the lookup still matches.
+
+Notes:
+
+- **Auth is unaffected.** Sessions authenticate from `ANTHROPIC_API_KEY` or
+  `CLAUDE_CODE_OAUTH_TOKEN` in the Environment panel, not from the config
+  directory.
+- **Do not put a `settings.json` in there.** Sessions load user-scope settings,
+  and its permission `allow` rules take effect before Cyrus approves a tool —
+  so it can widen a session Cyrus meant to keep narrow, such as a read-only PR
+  reviewer. Nothing in Cyrus writes this file. The entrypoint warns if one
+  appears.
+- **The first redeploy after adopting this still loses in-flight
+  conversations**, because nothing migrates the old ephemeral copy. Those
+  sessions restart with the full issue context instead of dead-ending.
+- **Transcripts accumulate in the volume.** Claude Code prunes old ones on its
+  own schedule, which is one reason Cyrus still recovers from a missing
+  conversation rather than relying on the store always being there.
 
 ## One-time prerequisites
 

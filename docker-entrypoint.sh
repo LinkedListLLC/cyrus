@@ -21,6 +21,34 @@ if [ ! -f /root/.cyrus/config.json ]; then
   echo ">> Seeded an empty /root/.cyrus/config.json (run cyrus self-auth-linear / self-add-repo next)."
 fi
 
+# Claude Code's conversation store lives in CLAUDE_CONFIG_DIR (set to a path
+# inside the volume by the Dockerfile), so agent sessions can be resumed after a
+# redeploy. Create it up front: the CLI makes it on demand, but a missing
+# directory here would hide a mis-set path until the first session failed.
+CLAUDE_PERSIST="${CLAUDE_CONFIG_DIR:-/root/.claude}"
+mkdir -p "$CLAUDE_PERSIST"
+case "$CLAUDE_PERSIST" in
+  /root/.cyrus/*) ;;
+  *)
+    echo ">> WARNING: CLAUDE_CONFIG_DIR is $CLAUDE_PERSIST, which is outside the"
+    echo ">> /root/.cyrus volume. Claude conversations will be wiped on redeploy,"
+    echo ">> and open Linear sessions will restart instead of resuming."
+    ;;
+esac
+
+# A settings.json here applies to EVERY session Cyrus starts, because sessions
+# load user-scope settings (settingSources includes "user"). Its permission
+# `allow` rules take effect before Cyrus is asked to approve a tool, so one can
+# widen a session Cyrus meant to keep narrow — a read-only PR reviewer, say.
+# Nothing in Cyrus writes this file. Before the store was persisted a stray one
+# only survived until the next redeploy; now it is permanent, so say so.
+if [ -f "$CLAUDE_PERSIST/settings.json" ]; then
+  echo ">> WARNING: $CLAUDE_PERSIST/settings.json exists and now persists across"
+  echo ">> redeploys. Its permission rules apply to every Cyrus session and can"
+  echo ">> override the tool restrictions Cyrus sets per repository or label."
+  echo ">> Delete it unless you put it there deliberately."
+fi
+
 # Persist Grok Build auth. `grok login` is a browser OAuth that drops a token in
 # the CLI's home directory, and only /root/.cyrus is a Dokploy volume — anything
 # written to /root/.grok would be wiped by the next redeploy. Symlinking the

@@ -72,6 +72,28 @@ ENV CYRUS_HOST_EXTERNAL=true
 # exposed directly to the internet with no proxy in front.
 ENV WEBHOOK_IP_VALIDATION=false
 
+# Claude Code keeps every conversation transcript in its config directory, at
+# projects/<sanitized-cwd>/<session-id>.jsonl. That directory defaults to
+# /root/.claude — outside the volume, so a redeploy deletes it. Cyrus's own
+# state IS in the volume and keeps the Claude session ID of each open Linear
+# session, so after a redeploy it resumes IDs the CLI can no longer find and
+# every one of those sessions dead-ends on "No conversation found with session
+# ID" (CYR-53). Point the whole store into the volume instead.
+#
+# CLAUDE_CONFIG_DIR moves the entire store, including the top-level
+# .claude.json that otherwise sits beside the directory (verified: projects/,
+# sessions/, backups/ and .claude.json all follow it). A symlink of
+# /root/.claude would leave that file behind on the ephemeral layer.
+#
+# The worktrees keying those project directories live at
+# /root/.cyrus/worktrees, which is also in the volume, so the paths — and
+# therefore the transcript lookup keys — stay stable across redeploys.
+#
+# Auth is unaffected: sessions authenticate from ANTHROPIC_API_KEY /
+# CLAUDE_CODE_OAUTH_TOKEN in the environment, which the runner forwards
+# explicitly.
+ENV CLAUDE_CONFIG_DIR=/root/.cyrus/claude
+
 # Grok Build. GROK_PATH pins the binary we baked in above, so resolution never
 # falls through to a stale ~/.grok/bin/grok inside the volume. GROK_HOME points
 # Cyrus's grok-runner at a directory *inside* the persisted /root/.cyrus volume,
