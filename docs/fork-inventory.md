@@ -2,7 +2,8 @@
 
 **Issue:** [CYR-48](https://linear.app/linkedlist/issue/CYR-48)
 **Written:** 2026-07-28
-**Status:** proposal. Do not open the clean PR before William approves this document.
+**Status:** approved. William answered all four questions on 2026-07-28 — see
+section 8. The rebuild follows the commit plan in section 7.
 
 ## 1. The fork point
 
@@ -11,9 +12,12 @@
 | Upstream | `ceedaragents/cyrus` (`upstream/main`) |
 | Fork | `LinkedListLLC/cyrus` (`origin/main`) |
 | Fork point (merge base) | `516d8a03` — "Patch Cyrus CLI security advisories (#1383)", 2026-07-23 |
-| Our commits after it | 45, all linear. No merge commits. |
+| Our commits after it | 50, all linear. No merge commits. |
 | Upstream commits after it | 3 |
-| Net change | 132 files, +16653 / −584 |
+| Net change | 134 files, +17283 / −584 |
+
+The count was 45 when this document was first written. PRs #22 and #23 added
+five more — see F20 and the notes on F1 and F3.
 
 Command that finds it again:
 
@@ -23,20 +27,27 @@ git merge-base origin/main upstream/main    # 516d8a033647612d5e7dd2ff88cc7f1951
 
 ## 2. Baseline of the current fork tip
 
-Measured on `166368dc` before any rework:
+Measured twice. The first column is the fork tip as this document was first
+written. The second is the same 50 commits replayed onto upstream v0.2.67 — the
+rebase audit of section 3.1, and the real acceptance gate.
 
-| Check | Result |
-| -- | -- |
-| `pnpm build` | pass |
-| `pnpm typecheck` | pass |
-| `pnpm test:packages:run` | pass |
-| edge-worker | 898 tests, 76 files |
-| core | 150 tests |
-| claude-runner | 166 tests, 5 skipped (live SDK, opt-in) |
-| grok-runner | 103 tests |
-| apps/cli | 127 tests |
+| Check | `166368dc` | rebased onto `d1a98b80` |
+| -- | -- | -- |
+| `pnpm install` | pass | pass, lockfile unchanged |
+| `pnpm build` | pass | pass |
+| `pnpm typecheck` | pass | pass |
+| `pnpm test:packages:run` | pass | pass |
+| edge-worker | 898 tests, 76 files | 909 tests, 77 files |
+| core | 150 | 150 |
+| claude-runner | 166, 5 skipped (live SDK, opt-in) | 166, 5 skipped |
+| grok-runner | 103 | 103 |
+| gemini-runner | — | 198, 1 skipped |
+| github-event-transport | — | 117 |
+| codex-runner | — | 69 |
 
-The clean branch must hold this baseline. Use it as the acceptance gate.
+The clean branch must hold the second column. Use it as the acceptance gate.
+The 11 extra edge-worker tests are F20 (CYR-53), which landed after the first
+measurement.
 
 ## 3. Upstream movement since the fork point
 
@@ -64,9 +75,41 @@ files auto-merge because the version line and the SDK line are far apart. **Chec
 the result by hand:** the clean branch must keep our `@anthropic-ai/claude-agent-sdk`
 `0.3.220` and take upstream's package version `0.2.67`.
 
+### 3.1 Rebase audit (Q4)
+
+Run on 2026-07-28, on a scratch worktree, to measure the real cost of the rebase
+before committing to it:
+
+```bash
+git worktree add /tmp/rebase-probe -b probe/rebase-audit origin/main
+cd /tmp/rebase-probe
+git rebase --onto upstream/main 516d8a03 probe/rebase-audit
+```
+
+Result:
+
+| Measure | Value |
+| -- | -- |
+| Commits replayed | 50 of 50 |
+| Files with a code conflict | **0** |
+| Files with any conflict | 1 — `CHANGELOG.md`, on 3 commits |
+| `pnpm install` | lockfile unchanged, so the auto-merge is coherent |
+| `pnpm build` / `typecheck` / `test:packages:run` | all pass |
+| Tree difference from `origin/main` | the upstream delta only, nothing else |
+
+The three `CHANGELOG.md` conflicts are structural, not semantic: upstream moved
+its `[Unreleased]` block into a `[0.2.67]` section, and our entries want a fresh
+`[Unreleased]` above it. The clean branch rewrites that file anyway (D1–D4), so
+the conflicts are throwaway.
+
+The hand checks in section 3 hold on the rebased tree: package version `0.2.67`,
+our SDK `0.3.220`, and upstream's Codex runtime `0.144.4`, all at once.
+
+**The rebase costs nothing. No path decision is needed.**
+
 ## 4. Feature inventory
 
-Nineteen features. The 45 commits map onto them with no remainder.
+Twenty features. The 50 commits map onto them with no remainder.
 
 ### F1 — Self-host Docker image and Dokploy runbook
 
@@ -74,10 +117,14 @@ Nineteen features. The 45 commits map onto them with no remainder.
 * **Commits:** `1f919524`, `4bfb26f1`, `4b848f68`, `a6223e48`, `e8dc8cc4`, `af55a26c`, `3c7e9ea4` (7)
 * **Files:** `Dockerfile`, `docker-entrypoint.sh`, `.dockerignore`, `.gitignore`, `docs/DOKPLOY.md`
 * **Tests:** none. CI never builds the image. See risk R4.
-* **Recommendation: keep.** Squash the seven commits into one. Six of them are
+* **Recommendation: keep.** Squash the eight commits into one. Six of them are
   doc additions to the same file, written as the deploy was debugged.
 * **Notes:** `4b848f68` seeds `config.json` because `cyrus self-auth-linear`
   fails without it. That is an upstream usability defect — see U3.
+* **Added after this document was first written:** `e8e7f462` sets
+  `CLAUDE_CONFIG_DIR` into the Dokploy volume, so a redeploy no longer deletes
+  every Claude transcript and dead-ends the open sessions that resume them.
+  Fold it into the same commit.
 
 ### F2 — Webhook IP allowlist off by default in the image
 
@@ -96,10 +143,13 @@ Nineteen features. The 45 commits map onto them with no remainder.
 ### F3 — Planning skills pack
 
 * **Purpose:** dogfood Wayfinder planning skills on the fork.
-* **Commits:** `a28d659b`, `d06ba5f4`, `166368dc` (3)
+* **Commits:** `a28d659b`, `d06ba5f4`, `166368dc`, `f96b01ca`, `20587949` (5)
 * **Files:** `.agents/skills/**` (wayfinder, research, grilling, prototype, domain-modeling, handoff, adhd), `.claude/skills/*` symlinks, `skills-lock.json`, `docs/agents/issue-tracker.md`, `CLAUDE.md`
 * **Tests:** not applicable.
 * **Recommendation: keep.** Squash into one commit.
+* **Added after this document was first written:** `f96b01ca` and `20587949`
+  make every PR target our fork instead of upstream. Both are `CLAUDE.md` house
+  rules — fold them in.
 
 ### F4 — Simplified Technical English mandate
 
@@ -271,13 +321,14 @@ Nineteen features. The 45 commits map onto them with no remainder.
 * **Commits:** `736daec2`, `b2b41cdd` (2)
 * **Files:** `EdgeWorker.ts`, `ReviewSessionTracker.ts`
 * **Tests:** additions to `EdgeWorker.review-on-status.test.ts`, `ReviewSessionTracker.test.ts`
-* **Recommendation: keep.** One commit. Two real guarantees: settle relevance
-  from memory before `fetchIssue`, so Cyrus stops fetching every issue in the
-  workspace on every state change; and make the two review triggers mutually
-  exclusive, so a status change plus an @mention cannot start two concurrent
-  reviews of one PR.
-* **Depends on F16.** The second guarantee only means something while
-  `reviewOnDelegateInStatus` exists. See Q1.
+* **Recommendation: keep the first guarantee, drop the second.** Settle
+  relevance from memory before `fetchIssue`, so Cyrus stops fetching every issue
+  in the workspace on every state change. That guarantee stands on its own.
+* **The second guarantee goes with F16.** Making the two review triggers
+  mutually exclusive only means something while `reviewOnDelegateInStatus`
+  exists, and Q1 drops it. What stays is the status trigger's own re-entrancy
+  guard (`hasReviewInFlight` in `maybeStartStatusReview`), which stops two
+  Issue webhooks in quick succession from starting two reviews of one PR.
 
 ### F16 — `reviewOnDelegateInStatus` (CYR-33)
 
@@ -285,7 +336,9 @@ Nineteen features. The 45 commits map onto them with no remainder.
 * **Commits:** `e22c3190`, `571cfeea` (2)
 * **Files:** `EdgeWorker.ts`, `ReviewSessionTracker.ts`, `core/config-schemas.ts`, 4 JSON schemas, `docs/CONFIG_FILE.md`, `docs/REVIEW_ON_STATUS.md`
 * **Tests:** `EdgeWorker.review-on-delegate.test.ts` (334 lines)
-* **Recommendation: DECISION REQUIRED — see Q1. Do not rebuild it by default.**
+* **Recommendation: DROP. Decided by William on 2026-07-28 — see Q1.** It is
+  the same feature as F12 behind a second trigger, and F12 is now confirmed
+  firing live. Do not rebuild it.
 * **It was built on a diagnosis that later proved wrong.** F14 concluded the
   `Issue` subscription was missing, so F16 added a second route through
   `AgentSessionEvent`/`created`, which always arrives. `00093f0b` then found
@@ -297,6 +350,22 @@ Nineteen features. The 45 commits map onto them with no remainder.
   route mostly does not work: for the common case — an issue Cyrus just built —
   Cyrus is already the delegate, and re-delegating starts nothing. Only an
   @mention reliably works.
+* **What the drop removes.** Audited on the fork tip. The excision is clean —
+  nothing outside this list refers to it:
+
+  | Item | Where |
+  | -- | -- |
+  | `maybeStartDelegatedReview()` and its one call site | `EdgeWorker.ts` |
+  | `adoptReviewSession()` | `ReviewSessionTracker.ts` |
+  | `reviewOnDelegateInStatus` field | `core/src/config-schemas.ts` + 4 JSON schemas |
+  | `EdgeWorker.review-on-delegate.test.ts` | 334 lines |
+  | `adoptReviewSession` describe block | `ReviewSessionTracker.test.ts` |
+  | 2 references | `EdgeWorker.review-on-status.test.ts` |
+  | Trigger documentation | `docs/REVIEW_ON_STATUS.md`, `docs/CONFIG_FILE.md` |
+
+  `hasReviewInFlight()` stays: `maybeStartStatusReview` calls it independently.
+* **How to reverse it if the status trigger fails again:** the code is on
+  `origin/main` at `e22c3190` and `571cfeea`. Cherry-pick, do not rewrite.
 
 ### F17 — Persona sweep (CYR-37)
 
@@ -329,7 +398,19 @@ Nineteen features. The 45 commits map onto them with no remainder.
   easy to read. Replaces a stale hardcoded `claude-opus-4-6` fallback with the
   `opus` alias.
 
-F4 folds into F3 in the commit plan, and F13 splits across two commits.
+### F20 — Unstick a session after a stop (CYR-53)
+
+* **Purpose:** stop a Linear agent session hanging on "starting task" forever.
+* **Commits:** `365a498f`, `fa714629` (2)
+* **Files:** `AgentSessionManager.ts`, `EdgeWorker.ts`
+* **Tests:** `AgentSessionManager.stop-session.test.ts` (+), `EdgeWorker.stale-resume-recovery.test.ts` (396 lines)
+* **Recommendation: keep.** One commit. Landed after this document was first
+  written (PR #23). Two defects: a stop flag that no later turn consumed, and a
+  resume ID the Claude CLI could no longer find. The container half of the same
+  investigation is in F1 (`e8e7f462`).
+
+F4 folds into F3 in the commit plan, F13 splits across two commits, and F16 is
+dropped.
 
 ## 5. Cross-cutting defects to fix during the rebuild
 
@@ -371,76 +452,106 @@ Claude Code's pre-approval.
 **R4 — Nothing tests the Docker image.** CI runs Biome, build, and tests only.
 The image is verified by deploying it. Build it once before merging.
 
-**R5 — `reviewOnStatus` has never been confirmed firing in production.** Five
-attempts over two weeks all failed. CYR-46 explains why and is marked Done, but
-its fix has not yet been seen working live. Confirm on the clean branch before
-treating F12 as delivered.
+**R5 — CLOSED. `reviewOnStatus` is confirmed firing in production.** Five
+attempts over two weeks failed before CYR-46 found the routing defect. William
+confirmed the trigger live on 2026-07-28. This is what lets Q1 drop F16 instead
+of deferring the decision.
 
 **R6 — A known limit of F12 is undocumented in the feature itself.** The
 reviewer can only review Cyrus-built branches (the `branchName` constraint).
 CYR-46 listed it as out of scope. Record it in `docs/REVIEW_ON_STATUS.md`.
 
-## 7. Proposed commit plan
+## 7. Commit plan
 
-Nineteen commits on `clean-fork-rebuild`, branched from `upstream/main`
-(`d1a98b80`, v0.2.67) rather than from the fork point — upstream has moved only
-3 mechanical commits and rebasing now is cheaper than rebasing later.
+Nineteen commits, branched from `upstream/main` (`d1a98b80`, v0.2.67) — the
+rebase of section 3.1. They go on four stacked branches, one per PR (Q3). Each
+PR targets the branch below it, so each review shows only its own commits.
+
+### PR 1 — Tool permissions and enforcement
 
 | # | Commit | Depends on |
 | -- | -- | -- |
-| 1 | `docs: planning skills pack, tracker conventions, and the STE mandate` (F3 + F4) | — |
-| 2 | `fix(tools): make the platform-default allowedTools fallback reachable` (F9) | — |
-| 3 | `fix(edge-worker): run both handlers when one Issue webhook is content and state` (F13a) | — |
-| 4 | `feat(core): engine-agnostic shell-command policy` (F8) | — |
-| 5 | `feat(core): READONLY_CODE_TOOLS preset; repoint the readOnly preset` (part of F17) | 4 |
-| 6 | `fix(claude): restrict built-in tools and enforce narrowed Bash grants` (F10) | 2, 4, 5 |
-| 7 | `feat(tools): populate the disallowedTools deny layer` (F11) | 6 |
-| 8 | `feat(grok): add Grok Build as a Cyrus agent runner over ACP` (F5) | — |
-| 9 | `feat(grok): enforce the tool policy client-side` (F6 + the scoped-deny fix from F11) | 4, 8 |
-| 10 | `feat(grok): continue after a policy denial, and audit denials` (F7) | 9 |
-| 11 | `feat(edge-worker): reviewOnStatus read-only review session` (F12) | 3, 5, 6, 7 |
-| 12 | `feat(edge-worker): review-trigger reachability signal and visible declines` (F14 corrected + F13b) | 11 |
-| 13 | `fix(edge-worker): make the codebase safe for Issue webhooks` (F15) | 11 |
-| 14 | *(optional)* `feat(edge-worker): reviewOnDelegateInStatus` (F16) — **only if Q1 says keep** | 11, 13 |
-| 15 | `feat(prompts): sweep the personas and add the Wayfinder pair` (F17) | 5 |
-| 16 | `feat(cli): add cyrus personas` (F18) | 2, 15 |
-| 17 | `build(docker): self-host image and Dokploy runbook` (F1 + F2) | 8 |
+| 1 | `fix(tools): make the platform-default allowedTools fallback reachable` (F9) | — |
+| 2 | `feat(core): engine-agnostic shell-command policy` (F8) | — |
+| 3 | `feat(core): READONLY_CODE_TOOLS preset; repoint the readOnly preset` (part of F17) | 2 |
+| 4 | `fix(claude): restrict built-in tools and enforce narrowed Bash grants` (F10) | 1, 2, 3 |
+| 5 | `feat(tools): populate the disallowedTools deny layer` (F11) | 4 |
+
+### PR 2 — Grok Build runner (on PR 1)
+
+| # | Commit | Depends on |
+| -- | -- | -- |
+| 6 | `feat(grok): add Grok Build as a Cyrus agent runner over ACP` (F5) | — |
+| 7 | `feat(grok): enforce the tool policy client-side` (F6 + the scoped-deny fix from F11) | 2, 6 |
+| 8 | `feat(grok): continue after a policy denial, and audit denials` (F7) | 7 |
+
+Commit 6 keeps Gautam Jain as author.
+
+### PR 3 — `reviewOnStatus` (on PR 2)
+
+| # | Commit | Depends on |
+| -- | -- | -- |
+| 9 | `fix(edge-worker): run both handlers when one Issue webhook is content and state` (F13a) | — |
+| 10 | `feat(edge-worker): reviewOnStatus read-only review session` (F12) | 3, 4, 5, 9 |
+| 11 | `feat(edge-worker): review-trigger reachability signal and visible declines` (F14 corrected + F13b) | 10 |
+| 12 | `fix(edge-worker): settle review relevance before fetching the issue` (F15, first guarantee only) | 10 |
+
+F16 is dropped (Q1), so there is no delegation trigger and no mutual-exclusion
+commit. Commit 12 keeps the `hasReviewInFlight` guard inside the status trigger.
+
+### PR 4 — Personas, CLI, deploy, deps, docs (on PR 3)
+
+| # | Commit | Depends on |
+| -- | -- | -- |
+| 13 | `docs: planning skills pack, tracker conventions, and the house rules` (F3 + F4) | — |
+| 14 | `feat(prompts): sweep the personas and add the Wayfinder pair` (F17) | 3 |
+| 15 | `feat(cli): add cyrus personas` (F18) | 1, 14 |
+| 16 | `fix(edge-worker): unstick a session after a stop and a dead resume ID` (F20) | — |
+| 17 | `build(docker): self-host image and Dokploy runbook` (F1 + F2) | 6, 16 |
 | 18 | `chore(deps): claude-agent-sdk 0.3.220 and the opus alias` (F19) | — |
 | 19 | `docs(changelog): one Unreleased section for the fork` (D1–D4) | all |
 
-Commits 1–4 are independent and can be written in parallel. Commits 8–10 (Grok)
-are independent of 11–14 (review) and can also run in parallel.
+### Gates
 
-Verification gate after every commit: `pnpm build`, `pnpm typecheck`,
-`pnpm test:packages:run`. Final gate: the section 2 baseline, plus the live SDK
-suite (R3), plus a Docker build (R4).
+Per commit: `pnpm build` and `pnpm typecheck`. Per PR tip: add
+`pnpm test:packages:run`. Final gate: the section 2 baseline (second column),
+plus the live SDK suite (R3), plus a Docker build (R4).
 
-## 8. Decisions needed before the rebuild starts
+### Construction method
 
-**Q1 — Keep `reviewOnDelegateInStatus` (F16)?**
-It exists because F14 concluded the `Issue` subscription was missing. CYR-46
-disproved that. With commit 3 in place, the original trigger should work, so
-F16's reason to exist is gone. Keeping it costs a behaviour trade: while
-enabled, delegating an issue in the review state always means "review this".
-Three options:
-1. **Drop it.** Smallest surface. Reverses if the status trigger fails again.
-2. **Keep it, off by default** (today's state). Costs a config field, a code
-   path, 334 lines of tests, and the mutual-exclusion logic in F15.
-3. **Defer.** Land commits 1–13, confirm `reviewOnStatus` fires live (R5), then
-   decide. **Recommended** — the evidence needed to decide does not exist yet.
+Section 3.1 proved the 50 commits replay onto v0.2.67 with no code conflict, so
+**reuse the code, never retype it.** Build each clean commit from the rebased
+tree, not from the original commit of a chain — R1. Where a feature reversed
+itself, the rebased tip already holds the final design.
 
-**Q2 — Send the two upstream defects upstream?**
-* **U1** — the unreachable `allowedTools` fallback (F9). Already written up in
-  `docs/upstream/allowed-tools-fallback-unreachable.md`, marked "not filed
-  upstream — William's call".
-* **U2** — the `else if` chain that drops bundled Issue webhooks (F13a).
-  Same class of defect, not yet written up.
-* **U3** — `cyrus self-auth-linear` fails when `config.json` does not exist (F1).
+## 8. Decisions taken
 
-**Q3 — One PR or several?**
-Nineteen commits is large for one review. A natural split is four PRs:
-tool permissions (1–7), Grok (8–10), review-on-status (11–14), and the rest
-(15–19). Each is independently green.
+William answered on 2026-07-28. Recorded here so the rebuild does not reopen them.
 
-**Q4 — Rebase onto `upstream/main` (v0.2.67), or stay on the fork point?**
-This plan assumes the rebase. Confirm.
+**Q1 — `reviewOnDelegateInStatus` (F16): DROP.**
+It is the same feature as `reviewOnStatus` behind a second trigger, and
+`reviewOnStatus` is now confirmed firing live (R5 is closed). The reason F16
+existed is gone, so it goes. The excision list is in F16; the code stays
+reachable on `origin/main` at `e22c3190` if the status trigger ever fails again.
+
+**Q2 — Upstream reports (U1, U2, U3): HOLD.**
+Do not send anything upstream until our own fixes are tight. Keep
+`docs/upstream/allowed-tools-fallback-unreachable.md`, and write U2 up in the
+same place, but file neither. Revisit after the four PRs merge.
+
+**Q3 — Four PRs.** Split as in section 7. Stacked, each on the one below.
+
+**Q4 — Rebase onto `upstream/main` (v0.2.67): YES.**
+Section 3.1 measured it: 50 of 50 commits replay, zero code conflicts, one
+throwaway `CHANGELOG.md` conflict, and the result builds, typechecks and passes
+every package suite. No fallback path is needed.
+
+## 9. Still open
+
+**M1 — How `main` takes the clean history.** The four PRs rebuild content that
+`origin/main` already carries, so they cannot target `main` — the diff would be
+empty. They stack on a snapshot of `upstream/main` instead. Once all four merge,
+`main` has to be moved to the stack tip, which rewrites 50 commits of published
+history and needs William's explicit go-ahead. Alternatives: keep the old history
+on an archive branch (`main-pre-rebuild`) before moving, or merge the stack into
+`main` as one merge commit and accept the duplicate history.
