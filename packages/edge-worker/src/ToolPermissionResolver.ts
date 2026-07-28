@@ -299,7 +299,15 @@ export class ToolPermissionResolver {
 		const effectivePromptType =
 			promptType === "graphite-orchestrator" ? "orchestrator" : promptType;
 
-		// Priority order (same as allowedTools):
+		// Priority order (same as allowedTools).
+		//
+		// Every rung is guarded on `?.length`, never on truthiness. `[]` is
+		// truthy in JavaScript, so a configured-but-empty list at any rung would
+		// short-circuit the ladder and make every rung below it unreachable.
+		// That exact bug lived on the *allowed* side for two months (CYR-28),
+		// where it silently disabled the platform-default fallback. The shape is
+		// identical here, so the guard has to be too.
+		//
 		// 1. Repository-specific prompt type configuration
 		const promptConfig = effectivePromptType
 			? repository.labelPrompts?.[effectivePromptType]
@@ -308,25 +316,33 @@ export class ToolPermissionResolver {
 			promptConfig && !Array.isArray(promptConfig)
 				? promptConfig.disallowedTools
 				: undefined;
-		if (promptDisallowedTools) {
+		if (promptDisallowedTools?.length) {
 			return promptDisallowedTools;
 		}
 		// 2. Global prompt type defaults
-		if (
-			effectivePromptType &&
-			this.config.promptDefaults?.[effectivePromptType]?.disallowedTools
-		) {
-			return this.config.promptDefaults[effectivePromptType].disallowedTools;
+		const promptDefaultDisallowedTools = effectivePromptType
+			? this.config.promptDefaults?.[effectivePromptType]?.disallowedTools
+			: undefined;
+		if (promptDefaultDisallowedTools?.length) {
+			return promptDefaultDisallowedTools;
 		}
 		// 3. Repository-level disallowed tools
-		if (repository.disallowedTools) {
+		if (repository.disallowedTools?.length) {
 			return repository.disallowedTools;
 		}
 		// 4. Global default disallowed tools
-		if (this.config.defaultDisallowedTools) {
+		if (this.config.defaultDisallowedTools?.length) {
 			return this.config.defaultDisallowedTools;
 		}
-		// 5. No defaults for disallowedTools
+		// 5. No built-in default here on purpose.
+		//
+		// The deny list a restricted persona needs is derived from its own
+		// `allowedTools` in `deriveBuiltInDisallowedTools` (claude-runner), not
+		// pinned to a fixed list here — a static default could not know whether
+		// this session is a read-only reviewer or an unrestricted builder, and
+		// denying a builder's `git push` would break the product's main path.
+		// An empty list here means "add nothing beyond what is derived", which
+		// is the safe default in a way an empty *allow* list was not.
 		return [];
 	}
 }

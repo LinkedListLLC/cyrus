@@ -1,3 +1,9 @@
+import {
+	commandMatchesAllowedBash,
+	grantsUnrestrictedBash,
+	MUTATING_BASH_DENY_RULES,
+	WRITE_BUILT_IN_DENY_RULES,
+} from "cyrus-core";
 import { availableTools } from "./config.js";
 
 /**
@@ -216,4 +222,110 @@ export function deriveBuiltInTools(
 	}
 
 	return [...granted].sort();
+}
+
+/**
+ * Extract the representative command a `Bash(prefix:*)` deny rule stands for,
+ * so it can be tested against the session's actual grants.
+ *
+ * `Bash(git commit:*)` -> `git commit`. Returns null for anything that is not
+ * a scoped `Bash(...)` rule.
+ */
+function denyRuleCommand(rule: string): string | null {
+	const match = TOOL_ENTRY_PATTERN.exec(rule.trim());
+	if (!match || match[1] !== "Bash") {
+		return null;
+	}
+	const argument = match[2];
+	if (argument === undefined || isUnrestrictedArgument(argument)) {
+		return null;
+	}
+	return argument.replace(/:\*$/, "").trim();
+}
+
+/**
+ * Derive the SDK `disallowedTools` option from an `allowedTools` list.
+ *
+ * ## Why this sits next to `deriveBuiltInTools`
+ *
+ * `tools` (what the model can see) and `disallowedTools` (what is refused
+ * regardless) answer the same question — "what may this persona do?" — from
+ * the same input. Deriving them in one place is what stops them drifting: a
+ * persona cannot gain a mutating tool in one list without losing it in the
+ * other, because both are computed from `allowedTools` by the same rules.
+ *
+ * It matters that this is a second layer rather than a nicer `tools`. Measured
+ * on the real SDK (CYR-25), `tools` and `canUseTool` are both bypassable — a
+ * read-only command classifier **inside Claude Code** pre-approves commands it
+ * considers non-mutating before the callback runs, and settings-file allow
+ * rules can shadow it invisibly. Deny rules are evaluated before both.
+ *
+ * That pre-approval is **not** the sandbox: it fires with no `sandbox` key
+ * configured at all, so it cannot be turned off from Cyrus's side. See the
+ * measured table in `cyrus-core`'s `REVIEW_DISALLOWED_TOOLS` docs.
+ *
+ * ## Rules
+ *
+ * 1. **No allow-list means no restriction.** `undefined` is the explicit "not
+ *    configured" signal, exactly as in {@link deriveBuiltInTools}. Returns `[]`.
+ *
+ * 2. **An unrestricted builder stays unclamped.** A bare `Bash` / `Bash(*)`
+ *    grant means unrestricted *by intent* — the builder personas that have to
+ *    commit, push and open PRs. Narrowing them here would break the product's
+ *    main path to make a restricted persona marginally tidier.
+ *
+ * 3. **Never deny what the allow-list actually granted.** Deny beats allow
+ *    everywhere, so emitting a rule that contradicts an explicit grant would
+ *    silently revoke it. Each candidate `Bash(...)` deny is tested against the
+ *    session's own grants with the shared matcher, and skipped if permitted —
+ *    a reviewer granted `Bash(git commit:*)` keeps it.
+ *
+ * 4. **MCP tools are never denied.** `mcp__linear` is how a read-only session
+ *    reports its results; a reviewer that cannot post its verdict is useless.
+ *    Nothing here emits an `mcp__*` rule.
+ */
+export function deriveBuiltInDisallowedTools(
+	allowedTools: readonly string[] | undefined,
+): string[] {
+	// Rule 1: not configured — do not restrict.
+	if (allowedTools === undefined) {
+		return [];
+	}
+
+	// Rule 2: unrestricted by intent — leave builders alone.
+	if (grantsUnrestrictedBash(allowedTools)) {
+		return [];
+	}
+
+	const granted = new Set(
+		allowedTools.map((entry) => {
+			const match = TOOL_ENTRY_PATTERN.exec(entry.trim());
+			return match?.[1] ?? "";
+		}),
+	);
+
+	const denied: string[] = [];
+
+	// Write-capable built-ins the allow-list did not grant.
+	for (const tool of WRITE_BUILT_IN_DENY_RULES) {
+		if (!granted.has(tool)) {
+			denied.push(tool);
+		}
+	}
+
+	// Mutating shell commands, minus anything this session was actually granted
+	// (rule 3). `bashGrants` is the same slice `ClaudeRunner` enforces through
+	// `canUseTool`, so the two layers agree on what the grants mean.
+	const bashGrants = allowedTools.filter((entry) =>
+		entry.trim().startsWith("Bash"),
+	);
+	for (const rule of MUTATING_BASH_DENY_RULES) {
+		const command = denyRuleCommand(rule);
+		if (command && commandMatchesAllowedBash(command, bashGrants)) {
+			continue;
+		}
+		denied.push(rule);
+	}
+
+	return denied;
 }
