@@ -1,7 +1,4 @@
-import {
-	LINEAR_DEFAULT_ALLOWED_TOOLS,
-	SLACK_DEFAULT_ALLOWED_TOOLS,
-} from "cyrus-core";
+import { LINEAR_DEFAULT_ALLOWED_TOOLS, READONLY_CODE_TOOLS } from "cyrus-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_CYRUS_HOME } from "./test-dirs.js";
 
@@ -248,10 +245,10 @@ describe("EdgeWorker - Dynamic Tools Configuration", () => {
 			// (LINEAR_DEFAULT_ALLOWED_TOOLS etc.) and only appear here when a
 			// preset/list includes them.
 
-			// Test debugger prompt with readOnly preset (resolves to the
-			// Slack platform default — the curated read-only set).
+			// Test debugger prompt with readOnly preset (resolves to
+			// READONLY_CODE_TOOLS — the curated read-only *code* set).
 			const debuggerTools = buildAllowedTools(repository, "debugger");
-			expect(debuggerTools).toEqual([...SLACK_DEFAULT_ALLOWED_TOOLS]);
+			expect(debuggerTools).toEqual([...READONLY_CODE_TOOLS]);
 
 			// Test builder prompt with custom array (returned verbatim).
 			const builderTools = buildAllowedTools(repository, "builder");

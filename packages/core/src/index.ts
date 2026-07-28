@@ -60,6 +60,8 @@ export {
 	GITHUB_DEFAULT_ALLOWED_TOOLS,
 	getDefaultAllowedTools,
 	LINEAR_DEFAULT_ALLOWED_TOOLS,
+	READONLY_CODE_TOOLS,
+	REVIEW_ALLOWED_TOOLS,
 	SLACK_DEFAULT_ALLOWED_TOOLS,
 } from "./allowed-tools-defaults.js";
 export type {

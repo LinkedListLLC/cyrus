@@ -7,6 +7,7 @@ import type { EdgeWorkerConfig, ILogger, RepositoryConfig } from "cyrus-core";
 import {
 	GITHUB_DEFAULT_ALLOWED_TOOLS,
 	LINEAR_DEFAULT_ALLOWED_TOOLS,
+	READONLY_CODE_TOOLS,
 	SLACK_DEFAULT_ALLOWED_TOOLS,
 } from "cyrus-core";
 
@@ -58,9 +59,16 @@ export class ToolPermissionResolver {
 
 		switch (preset) {
 			case "readOnly":
-				// Read-only preset for chat sessions falls back to the Slack default
-				// (which encodes the curated read-only set including MCP prefixes).
-				return [...SLACK_DEFAULT_ALLOWED_TOOLS];
+				// The curated read-only *code* toolset: Read/Glob/Grep, read-only
+				// git and gh inspection, subagents, and the workspace MCP prefixes.
+				//
+				// This used to return SLACK_DEFAULT_ALLOWED_TOOLS, which is the
+				// Slack *chat* list — no Grep, no Glob, no git. A `scoper`
+				// configured `readOnly` consequently could not search the codebase
+				// it was scoping (CYR-37). Slack chat is unaffected by the change:
+				// it calls `buildChatAllowedTools`, which reads the Slack default
+				// directly and never routes through this switch.
+				return [...READONLY_CODE_TOOLS];
 			case "safe":
 				return getSafeTools();
 			case "all":
