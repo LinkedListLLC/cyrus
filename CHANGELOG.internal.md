@@ -4,7 +4,8 @@ This changelog documents internal development changes, refactors, tooling update
 
 ## [Unreleased]
 
-_No internal-only changes._
+### Added
+- Fork inventory and clean-branch plan in `docs/fork-inventory.md`. Reviews the 45 commits between the fork point (`516d8a03`) and `origin/main`, groups them into 19 features with a keep/drop/rewrite call on each, records where the history reverses itself, and proposes a 19-commit plan for a clean branch off upstream v0.2.67. ([CYR-48](https://linear.app/linkedlist/issue/CYR-48))
 
 ## [0.2.66] - 2026-06-19
 
