@@ -1,3 +1,4 @@
+import { deriveBuiltInTools } from "cyrus-claude-runner";
 import type {
 	EdgeConfig,
 	EdgeWorkerConfig,
@@ -162,10 +163,16 @@ describe("CLI config -> ToolPermissionResolver (end to end)", () => {
 			const config = buildCliConfig();
 			const resolver = new ToolPermissionResolver(config, noopLogger);
 			const allowed = resolver.buildAllowedTools(makeRepository(), promptType);
+			const tools = deriveBuiltInTools(allowed) ?? [];
 
-			// Before the fix every one of these resolved to an empty list.
+			// Before the fix every one of these was `allowed=0 tools=0`.
 			expect(allowed).toEqual([...LINEAR_DEFAULT_ALLOWED_TOOLS]);
 			expect(allowed).toHaveLength(33);
+			expect(tools).toHaveLength(31);
+			expect(tools).toContain("Bash");
+			expect(tools).toContain("Read");
+			expect(tools).toContain("Write");
+			expect(tools).toContain("Edit");
 		});
 	}
 
