@@ -7688,7 +7688,10 @@ ${input.userComment}
 						(session.metadata?.model as string | undefined) ||
 						(repoConfig.claudeDefaultModel as string | undefined) ||
 						(repoConfig.model as string | undefined) ||
-						"claude-opus-4-6";
+						// Match the live default path (RunnerSelectionService): the
+						// "opus" alias always resolves to the latest Opus that the
+						// bundled Claude Code knows, so this never goes stale.
+						"opus";
 
 					// Build allowed/disallowed tools — same as what buildAgentRunnerConfig() uses.
 					// Without these, startup() inherits the user's defaultMode ("default"),
