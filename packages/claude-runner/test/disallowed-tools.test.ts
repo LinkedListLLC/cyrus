@@ -74,12 +74,20 @@ describe("ClaudeRunner - disallowedTools", () => {
 		const callArgs = queryMock.mock.calls[0][0];
 
 		expect(callArgs.options).toBeDefined();
-		expect(callArgs.options.disallowedTools).toEqual(["Bash", "WebFetch"]);
+		// Configured denials are passed through. Since CYR-25 they are merged
+		// with the list derived from `allowedTools` rather than replacing it, so
+		// this asserts containment instead of equality.
+		expect(callArgs.options.disallowedTools).toContain("Bash");
+		expect(callArgs.options.disallowedTools).toContain("WebFetch");
 		expect(callArgs.options.allowedTools).toContain("Read");
 		expect(callArgs.options.allowedTools).toContain("Edit");
 	});
 
-	it("should not pass disallowedTools when not configured", async () => {
+	// Changed by CYR-25. This used to assert that a restricted session got no
+	// `disallowedTools` at all — which was the bug: the deny layer, the only one
+	// that survives the SDK's sandbox auto-allow and settings-file shadowing,
+	// was never populated. A restricted allow-list now derives its own denials.
+	it("derives disallowedTools for a restricted session even when none are configured", async () => {
 		const config: ClaudeRunnerConfig = {
 			workingDirectory: "/test",
 			allowedTools: ["Read", "Edit"],
@@ -101,14 +109,40 @@ describe("ClaudeRunner - disallowedTools", () => {
 		const runner = new ClaudeRunner(config);
 		await runner.start("Test prompt");
 
-		// Check that query was called without disallowedTools
 		expect(queryMock).toHaveBeenCalledTimes(1);
 		const callArgs = queryMock.mock.calls[0][0];
 
 		expect(callArgs.options).toBeDefined();
-		expect(callArgs.options.disallowedTools).toBeUndefined();
+		// `Edit` was granted, so it must NOT be denied — deny beats allow, and
+		// denying it would silently revoke the grant.
+		expect(callArgs.options.disallowedTools).not.toContain("Edit");
+		expect(callArgs.options.disallowedTools).toContain("Write");
+		expect(callArgs.options.disallowedTools).toContain("Bash(sed:*)");
 		expect(callArgs.options.allowedTools).toContain("Read");
 		expect(callArgs.options.allowedTools).toContain("Edit");
+	});
+
+	it("leaves an unrestricted builder with no derived denials", async () => {
+		// A bare `Bash` grant means unrestricted by intent. Clamping these
+		// personas would break committing, pushing and opening PRs.
+		const config: ClaudeRunnerConfig = {
+			workingDirectory: "/test",
+			allowedTools: ["Read", "Write", "Edit", "Bash"],
+			cyrusHome: "/test/cyrus",
+		};
+
+		queryMock.mockImplementation(async function* (_args: any) {
+			yield {
+				type: "system",
+				role: "session_info",
+				content: { session_id: "test-session" },
+			};
+		});
+
+		await new ClaudeRunner(config).start("Test prompt");
+
+		const callArgs = queryMock.mock.calls[0][0];
+		expect(callArgs.options.disallowedTools).toBeUndefined();
 	});
 
 	it("should handle empty disallowedTools array", async () => {
@@ -133,12 +167,14 @@ describe("ClaudeRunner - disallowedTools", () => {
 		const runner = new ClaudeRunner(config);
 		await runner.start("Test prompt");
 
-		// Check that query was called without disallowedTools (empty array is falsy)
 		expect(queryMock).toHaveBeenCalledTimes(1);
 		const callArgs = queryMock.mock.calls[0][0];
 
 		expect(callArgs.options).toBeDefined();
-		expect(callArgs.options.disallowedTools).toBeUndefined();
+		// An explicitly empty config array adds nothing, but it must not
+		// suppress the derived list — that is the `[]`-is-truthy trap CYR-28
+		// fixed on the allowed side.
+		expect(callArgs.options.disallowedTools).toContain("Write");
 	});
 
 	it("should log disallowedTools when configured", async () => {

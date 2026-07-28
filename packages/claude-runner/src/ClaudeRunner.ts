@@ -32,7 +32,10 @@ import {
 	StreamingPrompt,
 } from "cyrus-core";
 import dotenv from "dotenv";
-import { deriveBuiltInTools } from "./built-in-tool-restrictions.js";
+import {
+	deriveBuiltInDisallowedTools,
+	deriveBuiltInTools,
+} from "./built-in-tool-restrictions.js";
 import { ClaudeMessageFormatter, type IMessageFormatter } from "./formatter.js";
 import { buildHomeDirectoryDisallowedTools } from "./home-directory-restrictions.js";
 import {
@@ -636,11 +639,32 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 					)
 				: [];
 
-			// Merge config-level denials with home directory denials, deduplicating in case
-			// any paths appear in both (e.g. an allowedDirectory that is also explicitly denied).
+			// Derive the deny list from the same `allowedTools` that drives the
+			// restricted `tools` set below, so the two cannot drift apart: a
+			// persona cannot gain a mutating tool in one without losing it in the
+			// other.
+			//
+			// This is the layer that actually holds. `tools` and `canUseTool` are
+			// both bypassable — measured on the real SDK (CYR-25), a session whose
+			// only shell grant was `Bash(git -C * pull)` still ran `git status`
+			// without the callback ever being consulted, because Claude Code
+			// pre-approves commands its own read-only classifier considers
+			// non-mutating. That happens with no `sandbox` key configured at all,
+			// so it is not a sandbox exemption and Cyrus cannot switch it off.
+			// Deny rules are evaluated ahead of it and ahead of the callback, so
+			// they hold where the other two do not. An unrestricted builder
+			// derives an empty list and stays unclamped.
+			const derivedDisallowedTools = deriveBuiltInDisallowedTools(
+				processedAllowedTools,
+			);
+
+			// Merge config-level denials with the derived and home directory denials,
+			// deduplicating in case any entry appears in more than one (e.g. an
+			// allowedDirectory that is also explicitly denied).
 			const processedDisallowedTools = [
 				...new Set([
 					...(this.config.disallowedTools ?? []),
+					...derivedDisallowedTools,
 					...homeDisallowedTools,
 				]),
 			];
