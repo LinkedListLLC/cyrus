@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Write all user-facing output in ASD-STE100 Simplified Technical English (Issue 9, Jan 2025)** — chat replies, PR and commit bodies, and docs written for a human reader: approved words in their approved meaning, active voice, one instruction per sentence, ≤20 words in procedural sentences and ≤25 in descriptive ones; code, identifiers, technical names, and product UI/marketing copy are exempt.
+
+**Open every pull request against our own fork `LinkedListLLC/cyrus` (`gh pr create --repo LinkedListLLC/cyrus`), never against the upstream `cyrusagents/cyrus` repo.**
+
 ## Project Overview
 
 Cyrus (Linear Claude Agent) is a monorepo JavaScript/TypeScript application that integrates Linear's issue tracking with Anthropic's Claude Code to automate software development tasks. The project is transitioning to an edge-proxy architecture that separates OAuth/webhook handling (proxy) from Claude processing (edge workers).
@@ -498,7 +502,7 @@ When working on this codebase, follow these practices:
    - Update `CHANGELOG.md` under the `## [Unreleased]` section with your changes
    - Use appropriate subsections: `### Added`, `### Changed`, `### Fixed`, `### Removed`
    - Include brief, clear descriptions of what was changed and why
-   - **Include the PR number/link**: If the PR is already created, include the link (e.g., `([#123](https://github.com/ceedaragents/cyrus/pull/123))`). If not, create the PR first, then update the changelog with the link, commit, and push.
+   - **Include the PR number/link**: If the PR is already created, include the link (e.g., `([#123](https://github.com/LinkedListLLC/cyrus/pull/123))`). If not, create the PR first, then update the changelog with the link, commit, and push.
    - Run `pnpm test:packages` to ensure all package tests pass
    - Run `pnpm typecheck` to verify TypeScript compilation
    - Consider running `pnpm build` to ensure the build succeeds
@@ -587,3 +591,9 @@ For detailed information about Gemini CLI configuration options (settings.json s
 - **Official Documentation**: https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/configuration.md
 
 The GeminiRunner automatically generates a `~/.gemini/settings.json` file with single-turn model aliases and preview features enabled if one doesn't already exist.
+
+## Planning this fork (LinkedList customization)
+
+This is the LinkedList self-hosted fork. We plan changes to it as **Linear** issues in the **Cyrus** team (`CYR`), using Matt Pocock's planning skills installed here (`wayfinder`, `research`, `prototype`, `grilling`, `domain-modeling`, `handoff` — see `skills-lock.json`). Tracker conventions + the wayfinder map/ticket operations + the **Todo = "Ready"** gate: **[docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)**.
+
+In `wayfinder`, `grilling`, or plan mode (`/plan`), run the `adhd` skill first on an open-ended decision to widen the options.
