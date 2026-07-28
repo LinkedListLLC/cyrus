@@ -23,13 +23,16 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentPendingWork, AskUserQuestionInput } from "cyrus-core";
 import {
+	commandMatchesAllowedBash,
 	createLogger,
+	grantsUnrestrictedBash,
 	type IAgentRunner,
 	type ILogger,
 	LogLevel,
 	StreamingPrompt,
 } from "cyrus-core";
 import dotenv from "dotenv";
+import { deriveBuiltInTools } from "./built-in-tool-restrictions.js";
 import { ClaudeMessageFormatter, type IMessageFormatter } from "./formatter.js";
 import { buildHomeDirectoryDisallowedTools } from "./home-directory-restrictions.js";
 import {
@@ -103,6 +106,18 @@ function serializeQueryOptionsReplacer(_key: string, value: unknown): unknown {
  * troubleshooting is unaffected.
  */
 type SanitizedQueryOptions = Record<string, unknown>;
+
+/**
+ * What the session's `allowedTools` permits the shell to run.
+ *
+ * `restricted: false` means "no narrowing to enforce" — either no allow-list at
+ * all, or a bare `Bash` grant. Otherwise `grants` holds the `Bash(...)` entries
+ * every command must match, and an empty `grants` denies the shell outright.
+ */
+interface BashPolicy {
+	restricted: boolean;
+	grants: string[];
+}
 
 function buildSanitizedQueryOptions(
 	queryOptions: Parameters<typeof query>[0],
@@ -272,6 +287,7 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 	private formatter: IMessageFormatter;
 	private pendingResultMessage: SDKMessage | null = null;
 	private canUseToolCallback: CanUseTool | undefined;
+	private bashPolicy: BashPolicy;
 	private repositoryEnv: Record<string, string> = {};
 	private keepSessionWarm: boolean;
 	private pendingSessionCrons: SessionCronSummary[] = [];
@@ -285,10 +301,14 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 		this.cyrusHome = config.cyrusHome;
 		this.formatter = new ClaudeMessageFormatter();
 
-		// Create canUseTool callback if onAskUserQuestion is provided
-		if (config.onAskUserQuestion) {
-			this.canUseToolCallback = this.createCanUseToolCallback();
-		}
+		// The callback is installed unconditionally, not just when an
+		// `onAskUserQuestion` handler is wired. It is the only place scoped
+		// `Bash(git diff:*)` grants are actually enforced (see
+		// `resolveBashPolicy`), and `deriveBuiltInTools` grants `Bash` for those
+		// narrowed entries on the strength of it. Making it conditional would
+		// hand a read-only persona an unenforced shell.
+		this.bashPolicy = this.resolveBashPolicy(config.allowedTools);
+		this.canUseToolCallback = this.createCanUseToolCallback();
 
 		// Forward config callbacks to events
 		if (config.onMessage) this.on("message", config.onMessage);
@@ -297,13 +317,49 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 	}
 
 	/**
-	 * Create the canUseTool callback for intercepting AskUserQuestion tool calls.
+	 * Work out what the session's `allowedTools` says about the shell.
 	 *
-	 * This implements the Claude SDK permission handling pattern:
-	 * - Intercepts AskUserQuestion tool calls
-	 * - Rejects requests with multiple questions (only 1 allowed at a time)
-	 * - Delegates to the onAskUserQuestion callback for presentation
-	 * - Returns the user's answers or denial
+	 * Three cases:
+	 *  - **no allow-list at all** (`allowedTools` undefined): unrestricted, the
+	 *    SDK default toolset applies and there is nothing to enforce;
+	 *  - **a bare `Bash` / `Bash(*)` grant**: unrestricted by intent — the
+	 *    builder personas — so every command is permitted;
+	 *  - **anything else**: restricted. Every shell command must be named by one
+	 *    of the `Bash(...)` grants. An allow-list with no `Bash` entry at all
+	 *    lands here too, with zero grants, so nothing is permitted — which is
+	 *    what a list that never mentions the shell means.
+	 */
+	private resolveBashPolicy(
+		allowedTools: readonly string[] | undefined,
+	): BashPolicy {
+		if (allowedTools === undefined || grantsUnrestrictedBash(allowedTools)) {
+			return { restricted: false, grants: [] };
+		}
+		return {
+			restricted: true,
+			grants: allowedTools.filter((entry) => entry.trim().startsWith("Bash")),
+		};
+	}
+
+	/**
+	 * Create the canUseTool callback the SDK consults before running a tool.
+	 *
+	 * Two jobs:
+	 *
+	 * 1. **Enforce scoped `Bash(...)` grants.** `allowedTools` cannot do this —
+	 *    it only auto-approves, it never denies — so a grant like
+	 *    `Bash(git diff:*)` is a promise the SDK alone cannot keep. Here it can
+	 *    be kept: every command the string would run is matched against the
+	 *    grants with `commandMatchesAllowedBash`, so a chain is only as
+	 *    permitted as its least-permitted link and `git diff HEAD && sed -i …`
+	 *    is refused. Fails closed on a missing or unparseable command.
+	 *
+	 *    This is the counterpart to `deriveBuiltInTools` granting `Bash` for
+	 *    narrowed entries: before CYR-20 the grant was dropped instead, and a
+	 *    `readOnly` reviewer silently had no shell at all.
+	 *
+	 * 2. **Intercept `AskUserQuestion`**, rejecting multi-question requests and
+	 *    delegating presentation to the `onAskUserQuestion` handler.
 	 *
 	 * @see {@link https://platform.claude.com/docs/en/agent-sdk/permissions#handling-the-ask-user-question-tool}
 	 */
@@ -316,6 +372,32 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 				toolUseID: string;
 			},
 		): Promise<PermissionResult> => {
+			if (toolName === "Bash" && this.bashPolicy.restricted) {
+				const command = input.command;
+				if (typeof command !== "string" || command.trim() === "") {
+					this.logger.warn(
+						"Denying Bash call with no readable command (failing closed)",
+					);
+					return {
+						behavior: "deny",
+						message:
+							"Denied: this session's shell access is scoped to specific commands, and this call carried no readable command.",
+					};
+				}
+				if (!commandMatchesAllowedBash(command, this.bashPolicy.grants)) {
+					this.logger.warn(
+						`Denying Bash command outside the allow-list: ${command.slice(0, 200)}`,
+					);
+					return {
+						behavior: "deny",
+						message: `Denied: this session may only run ${
+							this.bashPolicy.grants.join(", ") || "no shell commands"
+						}. Every command in a chain must be permitted, so combining an allowed command with a disallowed one is refused.`,
+					};
+				}
+				return { behavior: "allow", updatedInput: input };
+			}
+
 			// Only intercept AskUserQuestion tool
 			if (toolName !== "AskUserQuestion") {
 				// Allow all other tools to proceed normally
@@ -571,6 +653,68 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 				);
 			}
 
+			// Decide the shell policy from the *effective* allow-list, then take the
+			// Bash grants back out of what the SDK sees.
+			//
+			// This is load-bearing, and the SDK says so itself
+			// (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED): "Bare allowedTools entries
+			// auto-approve the whole tool before the callback is consulted […]
+			// remove the bare names from allowedTools so they fall through to
+			// canUseTool." A *scoped* entry is no safer for our purposes: the SDK
+			// would match `Bash(git diff:*)` against the head of the command string
+			// and auto-approve `git diff HEAD && sed -i …` before our chain-aware
+			// matcher ever runs. So when the policy is restricted, every `Bash`
+			// entry is stripped and the callback is the single decision point.
+			//
+			// Caveat, verbatim from that same warning: "Allow rules from settings
+			// files can also shadow the callback but are not visible here." We pass
+			// settingSources: ["user","project","local"], so a `permissions.allow`
+			// entry for Bash in the operator's `~/.claude/settings.json` or in the
+			// checked-out repo's `.claude/settings.json` CAN still auto-approve a
+			// command this callback would refuse. `disallowedTools` is the layer
+			// that survives that, because deny beats allow everywhere.
+			this.bashPolicy = this.resolveBashPolicy(processedAllowedTools);
+
+			// Restrict the built-in toolset to what `allowedTools` actually grants.
+			//
+			// `allowedTools` alone does NOT restrict anything — the SDK typings are
+			// explicit that it is an auto-approve list and that `tools` is the option
+			// to "restrict which tools are available". Without this, a `readOnly`
+			// persona still has Write/Edit/Bash in context. An explicit
+			// `config.tools` always wins; otherwise we derive the set. MCP tools are
+			// unaffected by `tools`, so `mcp__linear` and friends stay reachable.
+			const derivedTools =
+				this.config.tools !== undefined
+					? this.config.tools
+					: deriveBuiltInTools(processedAllowedTools, {
+							// Setting `tools` drops AskUserQuestion from the built-in set,
+							// which would break the interception in canUseTool. Keyed on the
+							// handler, not on the callback: the callback is now always
+							// installed (for Bash enforcement), but offering the model a
+							// question tool with nothing to present it would only produce a
+							// denial.
+							includeAskUserQuestion:
+								this.config.onAskUserQuestion !== undefined,
+							onDropped: (entry, reason) => {
+								this.logger.warn(
+									`Not granting built-in tool for allowedTools entry "${entry}": ${reason}`,
+								);
+							},
+						});
+
+			if (derivedTools !== undefined) {
+				this.logger.debug("Built-in tools available to model:", derivedTools);
+			}
+
+			// Now that `tools` has been derived (and so `Bash` is in the model's
+			// context when a scoped grant asked for it), take the Bash entries out
+			// of the auto-approve list. See the note above `resolveBashPolicy`.
+			if (this.bashPolicy.restricted) {
+				processedAllowedTools = processedAllowedTools?.filter(
+					(entry) => !entry.trim().startsWith("Bash"),
+				);
+			}
+
 			// Parse MCP config - merge file(s) and inline configs
 			let mcpServers = {};
 
@@ -728,7 +872,7 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 					...(this.config.skills !== undefined && {
 						skills: this.config.skills,
 					}),
-					...(this.config.tools !== undefined && { tools: this.config.tools }),
+					...(derivedTools !== undefined && { tools: derivedTools }),
 					...(this.config.maxTurns && { maxTurns: this.config.maxTurns }),
 					...(this.config.outputFormat && {
 						outputFormat: this.config.outputFormat,

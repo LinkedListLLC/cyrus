@@ -1,4 +1,4 @@
-import { getAllTools } from "cyrus-claude-runner";
+import { deriveBuiltInTools, getAllTools } from "cyrus-claude-runner";
 import type { EdgeWorkerConfig, ILogger, RepositoryConfig } from "cyrus-core";
 import {
 	LINEAR_DEFAULT_ALLOWED_TOOLS,
@@ -83,10 +83,10 @@ function resolve(
 	config: EdgeWorkerConfig,
 	repository: RepositoryConfig,
 	promptType?: PromptType,
-): { allowed: string[] } {
+): { allowed: string[]; tools: string[] } {
 	const resolver = new ToolPermissionResolver(config, noopLogger);
 	const allowed = resolver.buildAllowedTools(repository, promptType);
-	return { allowed };
+	return { allowed, tools: deriveBuiltInTools(allowed) ?? [] };
 }
 
 describe("ToolPermissionResolver — platform-default allowedTools fallback", () => {
@@ -95,7 +95,7 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 			const label = promptType ?? "(no label)";
 
 			it(`resolves a non-empty tool set for "${label}" when linearAllowedTools is []`, () => {
-				const { allowed } = resolve(
+				const { allowed, tools } = resolve(
 					makeEdgeWorkerConfig({ linearAllowedTools: [] }),
 					makeRepository(),
 					promptType,
@@ -104,6 +104,7 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 				// The assertion that fails before the fix: every one of these
 				// resolved to `allowed=0 tools=0`.
 				expect(allowed.length).toBeGreaterThan(0);
+				expect(tools.length).toBeGreaterThan(0);
 				expect(allowed).toEqual([...LINEAR_DEFAULT_ALLOWED_TOOLS]);
 			});
 
@@ -120,17 +121,22 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 				);
 
 				expect(withEmpty.allowed).toEqual(withAbsent.allowed);
+				expect(withEmpty.tools).toEqual(withAbsent.tools);
 			});
 		}
 
 		it("pins the exact resolution for the default (unlabelled) session", () => {
-			const { allowed } = resolve(
+			const { allowed, tools } = resolve(
 				makeEdgeWorkerConfig(),
 				makeRepository(),
 				undefined,
 			);
 
 			expect(allowed).toHaveLength(33);
+			expect(tools).toHaveLength(31);
+			expect(tools).toContain("Bash");
+			expect(tools).toContain("Write");
+			expect(tools).toContain("Edit");
 		});
 
 		it("still honours a workspace linearAllowedTools that is actually set", () => {
@@ -158,7 +164,7 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 	describe("rung 3 — repository-level allowedTools", () => {
 		it("returns a repo-level array verbatim (the production stop-gap must keep working)", () => {
 			const stopGap = [...LINEAR_DEFAULT_ALLOWED_TOOLS];
-			const { allowed } = resolve(
+			const { allowed, tools } = resolve(
 				makeEdgeWorkerConfig(),
 				makeRepository({ allowedTools: stopGap }),
 				undefined,
@@ -166,10 +172,12 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 
 			expect(allowed).toEqual(stopGap);
 			expect(allowed).toHaveLength(33);
+			expect(tools).toHaveLength(31);
+			expect(tools).toContain("Bash");
 		});
 
 		it("expands a repo-level preset string instead of treating it as one tool name", () => {
-			const { allowed } = resolve(
+			const { allowed, tools } = resolve(
 				makeEdgeWorkerConfig(),
 				// Neither config loader validates against the Zod schema — both
 				// `ConfigService.load` and `ConfigManager.loadConfigSafely` raw
@@ -182,22 +190,28 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 			// Before the fix: allowed === ["all"], tools === [] — silently zero.
 			expect(allowed).toEqual(getAllTools());
 			expect(allowed).toHaveLength(29);
+			expect(tools).toHaveLength(31);
+			expect(tools).toContain("Bash");
+			expect(tools).toContain("Write");
+			expect(tools).toContain("Edit");
 		});
 
 		it("expands a repo-level readOnly preset string", () => {
-			const { allowed } = resolve(
+			const { allowed, tools } = resolve(
 				makeEdgeWorkerConfig(),
 				makeRepository({ allowedTools: "readOnly" as unknown as string[] }),
 				undefined,
 			);
 
 			expect(allowed).toEqual([...READONLY_CODE_TOOLS]);
+			expect(tools).not.toContain("Write");
+			expect(tools).not.toContain("Edit");
 		});
 	});
 
 	describe("no regressions on the label-prompt rungs", () => {
 		it('scoper with allowedTools "readOnly" can search the codebase it is scoping', () => {
-			const { allowed } = resolve(
+			const { allowed, tools } = resolve(
 				makeEdgeWorkerConfig(),
 				makeRepository({
 					labelPrompts: {
@@ -212,10 +226,16 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 			// CYR-37: the whole point of repointing the preset. Before, `readOnly`
 			// resolved to the Slack *chat* list, which has neither of these — so a
 			// scoper could only read paths it already knew the names of.
+			expect(tools).toContain("Grep");
+			expect(tools).toContain("Glob");
 			expect(allowed).toContain("Bash(git log:*)");
+			expect(tools).toContain("Bash");
 
 			// Still read-only, and still able to write back to the issue tracker.
 			expect(allowed).toContain("mcp__linear");
+			expect(tools).not.toContain("Write");
+			expect(tools).not.toContain("Edit");
+			expect(tools).not.toContain("NotebookEdit");
 		});
 
 		it("the readOnly preset grants no unnarrowed Bash and no mutating git", () => {
@@ -231,7 +251,7 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 		});
 
 		it('builder with allowedTools "all" resolves 29 -> 31 with Bash/Write/Edit', () => {
-			const { allowed } = resolve(
+			const { allowed, tools } = resolve(
 				makeEdgeWorkerConfig(),
 				makeRepository({
 					labelPrompts: {
@@ -242,6 +262,10 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 			);
 
 			expect(allowed).toHaveLength(29);
+			expect(tools).toHaveLength(31);
+			expect(tools).toContain("Bash");
+			expect(tools).toContain("Write");
+			expect(tools).toContain("Edit");
 		});
 
 		it("global promptDefaults still win over the workspace default", () => {
@@ -294,6 +318,7 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 			const allowed = resolver.buildGithubAllowedTools(makeRepository());
 
 			expect(allowed.length).toBeGreaterThan(0);
+			expect(deriveBuiltInTools(allowed) ?? []).not.toHaveLength(0);
 			// The swap-and-restore around the Linear ladder must leave the
 			// original workspace value untouched.
 			expect(config.linearAllowedTools).toEqual([]);
