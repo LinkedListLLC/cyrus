@@ -123,6 +123,7 @@ import {
 	isNoteOnMergeRequest,
 	stripMention as stripGitLabMention,
 } from "cyrus-gitlab-event-transport";
+import { GrokRunner } from "cyrus-grok-runner";
 import {
 	LinearEventTransport,
 	LinearIssueTrackerService,
@@ -5334,7 +5335,7 @@ ${taskSection}`;
 	 * Instantiate the appropriate runner for the given type.
 	 */
 	private createRunnerForType(
-		runnerType: "claude" | "gemini" | "codex" | "cursor",
+		runnerType: "claude" | "gemini" | "codex" | "cursor" | "grok",
 		config: AgentRunnerConfig,
 	): IAgentRunner {
 		switch (runnerType) {
@@ -5352,6 +5353,8 @@ ${taskSection}`;
 				return new CodexRunner(config);
 			case "cursor":
 				return new CursorRunner(config);
+			case "grok":
+				return new GrokRunner(config);
 			default:
 				throw new Error(`Unknown runner type: ${runnerType satisfies never}`);
 		}
@@ -5850,12 +5853,15 @@ ${taskSection}`;
 					? "codex"
 					: session.cursorSessionId
 						? "cursor"
-						: null;
+						: session.grokSessionId
+							? "grok"
+							: null;
 		const runnerSessionId =
 			session.claudeSessionId ??
 			session.geminiSessionId ??
 			session.codexSessionId ??
 			session.cursorSessionId ??
+			session.grokSessionId ??
 			null;
 
 		const sessionSource = session.id.startsWith("github-")
@@ -7205,12 +7211,14 @@ ${input.userComment}
 		const hasGeminiSession = !isNewSession && Boolean(session.geminiSessionId);
 		const hasCodexSession = !isNewSession && Boolean(session.codexSessionId);
 		const hasCursorSession = !isNewSession && Boolean(session.cursorSessionId);
+		const hasGrokSession = !isNewSession && Boolean(session.grokSessionId);
 		const needsNewSession =
 			isNewSession ||
 			(!hasClaudeSession &&
 				!hasGeminiSession &&
 				!hasCodexSession &&
-				!hasCursorSession);
+				!hasCursorSession &&
+				!hasGrokSession);
 
 		// Fetch system prompt based on labels
 
@@ -7253,7 +7261,9 @@ ${input.userComment}
 					? session.geminiSessionId
 					: session.codexSessionId
 						? session.codexSessionId
-						: session.cursorSessionId;
+						: session.cursorSessionId
+							? session.cursorSessionId
+							: session.grokSessionId;
 
 		console.log(
 			`[resumeAgentSession] needsNewSession=${needsNewSession}, resumeSessionId=${resumeSessionId ?? "none"}`,
