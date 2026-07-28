@@ -33,6 +33,13 @@ export type { SerializedGlobalRegistryState } from "./GlobalSessionRegistry.js";
 export { GlobalSessionRegistry } from "./GlobalSessionRegistry.js";
 export type { McpConfigServiceDeps } from "./McpConfigService.js";
 export { McpConfigService } from "./McpConfigService.js";
+// Exported so `cyrus personas` can resolve a label set through the *real*
+// matcher rather than a second copy of the rules (CYR-43).
+export type {
+	PromptBuilderDeps,
+	SystemPromptResult,
+} from "./PromptBuilder.js";
+export { PromptBuilder } from "./PromptBuilder.js";
 export { RepositoryRouter } from "./RepositoryRouter.js";
 export type {
 	ChatRunnerConfigInput,
