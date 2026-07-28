@@ -108,6 +108,10 @@ const LabelPromptsSchema = z.object({
 	scoper: LabelPromptConfigSchema.optional(),
 	orchestrator: LabelPromptConfigSchema.optional(),
 	"graphite-orchestrator": LabelPromptConfigSchema.optional(),
+	/** Read-only Wayfinder personas: map, research, grilling. */
+	wayfinder: LabelPromptConfigSchema.optional(),
+	/** Write-capable Wayfinder personas: task, prototype. */
+	"wayfinder-task": LabelPromptConfigSchema.optional(),
 	graphite: GraphiteLabelConfigSchema.optional(),
 });
 
@@ -257,6 +261,8 @@ const PromptDefaultsSchema = z.object({
 	scoper: PromptTypeDefaultsSchema.optional(),
 	orchestrator: PromptTypeDefaultsSchema.optional(),
 	"graphite-orchestrator": PromptTypeDefaultsSchema.optional(),
+	wayfinder: PromptTypeDefaultsSchema.optional(),
+	"wayfinder-task": PromptTypeDefaultsSchema.optional(),
 });
 
 /**

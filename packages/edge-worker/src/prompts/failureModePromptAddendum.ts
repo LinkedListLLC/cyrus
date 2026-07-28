@@ -3,8 +3,8 @@
  * appended to every customer-facing system prompt.
  *
  * Covered entrypoints (see `RunnerConfigBuilder.applyFailureModeAddendum`):
- *   - Linear issue sessions — all 5 prompt flavors (builder, debugger,
- *     scoper, orchestrator, graphite-orchestrator).
+ *   - Linear issue sessions — all 7 prompt flavors (builder, debugger,
+ *     scoper, orchestrator, graphite-orchestrator, wayfinder, wayfinder-task).
  *   - Slack chat sessions.
  *   - GitHub PR chat sessions.
  *

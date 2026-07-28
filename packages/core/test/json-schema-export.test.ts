@@ -98,6 +98,8 @@ describe("JSON Schema export", () => {
 			expect(pd.properties).toHaveProperty("scoper");
 			expect(pd.properties).toHaveProperty("orchestrator");
 			expect(pd.properties).toHaveProperty("graphite-orchestrator");
+			expect(pd.properties).toHaveProperty("wayfinder");
+			expect(pd.properties).toHaveProperty("wayfinder-task");
 		});
 
 		it("represents linearWorkspaces as record with string keys", () => {

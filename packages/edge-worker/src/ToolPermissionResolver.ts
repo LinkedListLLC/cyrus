@@ -17,7 +17,9 @@ export type PromptType =
 	| "builder"
 	| "scoper"
 	| "orchestrator"
-	| "graphite-orchestrator";
+	| "graphite-orchestrator"
+	| "wayfinder"
+	| "wayfinder-task";
 
 /**
  * Unified tool permission resolver for issue, chat, and webhook-triggered
