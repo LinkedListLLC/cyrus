@@ -42,6 +42,92 @@ spreads the new object into the live map. No `ConfigManager` change is needed (u
 
 ---
 
+## Prerequisite: the Linear app must receive `Issue` webhooks
+
+**Setting `reviewOnStatus` is not sufficient.** The trigger is reachable from exactly one webhook
+type — `Issue` / `update` — and Linear only delivers that if the OAuth app is subscribed to the
+**`Issue` resource type** (Linear → Settings → API → your application → Webhooks). Agent apps are
+commonly set up with only *Agent session events* and *Inbox notifications*, and with that
+configuration **no review can ever start**: the config is valid, the code is correct, and the
+router branch is simply never taken.
+
+This is not hypothetical. It is how the feature shipped: designed, reviewed against five blocking
+findings, merged, deployed and switched on, while being unable to fire (CYR-33). Every check was
+performed below the level of the defect — the break was outside the handler, in whether the webhook
+arrives at all.
+
+### Why it *still* did not fire after the subscription was enabled (CYR-46)
+
+The subscription was turned on, and reviews continued not to happen for another two weeks. Two
+further defects, both now fixed:
+
+- **A state change bundled with a content change was routed to the wrong handler.** The router
+  tested `isIssueTitleOrDescriptionUpdateWebhook` (title | description | attachments) *before*
+  `isIssueStateIdUpdateWebhook` (stateId) in an `else if` chain. Linear packs **every** field
+  changed by one save into a single `updatedFrom`, so renaming an issue as you move it to In Review
+  produces one webhook that matches both — and first match won. Both handlers now run; the concerns
+  are independent, and reordering would only have moved the dropped path onto the other handler.
+- **Every decline was invisible.** `resolveRepositoryForIssue` returning null logged at `debug`; a
+  state-name mismatch and the `handleIssueStateChange` early return logged nothing at all.
+  Production runs at INFO, so a declined review was indistinguishable from a feature that had never
+  been built. That silence, more than either bug, is why this took five attempts to diagnose. Every
+  decline now logs at INFO with its reason.
+
+A third, related trap: the reachability signal used to fire on **any** `Issue` webhook and announce
+*"the reviewOnStatus trigger is reachable on this deployment"*. It was observed doing so on a
+description edit — a webhook that routes to the content handler and can never reach the reviewer.
+It now fires only on an `Issue`/`update` carrying a `stateId`, and says explicitly when an `Issue`
+webhook arrives that *cannot* start a review. **A signal that asserts more than it measured is
+worse than no signal**: this one ruled out the channel and sent a live investigation to the wrong
+layer.
+
+### Reading the log
+
+At INFO you should now see exactly one of these per state change on a repository with
+`reviewOnStatus` set:
+
+| Line | Meaning |
+|---|---|
+| `✅ Issue/update webhook carrying a stateId received — …reachable` | Once per process. The trigger genuinely works. |
+| `Issue entity webhook received (no stateId…)` | Once per process. Subscription live, but this webhook was content-only. |
+| `No review for X: no session has ever run for this issue…` | Cyrus never worked the issue, so it resolves to no repository. |
+| `No review for X: moved to "A", but 'repo' triggers on "B"` | State-name mismatch. |
+| `No review for X: duplicate trigger (key=…)` | Linear redelivery; expected. |
+| `Review already in progress for X` | The in-flight guard. |
+| `X moved to "…" — starting read-only review for repo` | It fired. |
+
+### Why the notification channel cannot be used instead
+
+Linear *does* deliver `AppUserNotification` / `issueStatusChanged` to agent apps without any extra
+subscription, which makes it a tempting substitute. It is not one, for two independent reasons:
+
+1. **It is terminal-only.** Measured over a 120-minute production window (2026-07-26): two terminal
+   transitions produced two notifications; five non-terminal transitions — one into "In Progress"
+   and four into "In Review" — produced **none**. A review triggers on a non-terminal state, so the
+   signal it needs never appears on this channel.
+2. **That channel already means something else.** `isIssueStateChangeWebhook` feeds the message bus
+   via `buildTerminalStateMessage`, which stamps `isTerminal: true` unconditionally;
+   `handleIssueStateChangeMessage` then stops the issue's sessions and deletes its worktrees.
+   Routing a non-terminal state through it would kill running sessions.
+
+### Confirming it works
+
+Two log lines make the difference visible without a webhook capture:
+
+- at startup, when any repository sets `reviewOnStatus`, Cyrus logs the state it is waiting for and
+  names this prerequisite;
+- the first `Issue` webhook logs `✅ Issue entity webhook received — the reviewOnStatus trigger is
+  reachable on this deployment.`
+
+If instead you see a warning that a status notification arrived while no `Issue` webhook ever has,
+the subscription is missing — that is the exact signature of the broken configuration.
+
+> **Note:** changing an OAuth application's webhook resource types may require re-authorizing the
+> app for already-connected workspaces (`cyrus self-auth-linear`) before delivery begins. Confirm
+> in Linear's own settings rather than assuming; this side cannot inspect them.
+
+---
+
 ## How it works
 
 1. **Trigger.** Linear sends an `Issue` / `update` webhook whose `updatedFrom` contains `stateId`.
@@ -164,6 +250,15 @@ spreads the new object into the live map. No `ConfigManager` change is needed (u
 - `RunnerConfigBuilder.review-stop-hook.test.ts` — against a real detached worktree at a PR head,
   the ship guardrail *would* block the review and order it to commit and push; a read-only session
   gets no Stop hook, while builder sessions still do.
+- `EdgeWorker.review-trigger-reachability.test.ts` — **the only test that drives the real router.**
+  Every test above calls `handleIssueStateChange` directly, which verifies the feature from the
+  handler inward and is precisely why an unreachable trigger survived them all. This one feeds
+  `handleWebhook` the exact `type`/`action` pairs production delivers and pins the reachable set to
+  a single shape (`Issue`/`update` with `updatedFrom.stateId`) — `issueStatusChanged`,
+  `issueAssignedToYou`, `issueSubscribed`, `issueNewComment`, `AgentSessionEvent`/`created`, a
+  title-only update and `Issue`/`remove` all reach nothing. It also covers the unreachable-trigger
+  warning: fires once, only when a repository opted in, and never after an `Issue` webhook has
+  proved the channel live.
 
 ## Verified vs assumed
 
