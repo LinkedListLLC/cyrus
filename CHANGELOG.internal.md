@@ -4,7 +4,20 @@ This changelog documents internal development changes, refactors, tooling update
 
 ## [Unreleased]
 
-_No internal-only changes._
+This section covers the LinkedList fork only.
+
+### Added
+- Wayfinder planning skills (`wayfinder`, `research`, `grilling`, `prototype`, `domain-modeling`, `handoff`, `adhd`) under `.agents/skills`, symlinked into `.claude/skills` and pinned by `skills-lock.json`. This fork plans its own changes as Linear issues in the CYR team; conventions in `docs/agents/issue-tracker.md`. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
+- `docs/PERSONAS.md` — the persona specification the prompts are written to. ([CYR-37](https://linear.app/linkedlist/issue/CYR-37), [#27](https://github.com/LinkedListLLC/cyrus/pull/27))
+- `docs/REVIEW_ON_STATUS.md` — how the review trigger works, what is verified against a live workspace, and its known limits. ([CYR-16](https://linear.app/linkedlist/issue/CYR-16), [#26](https://github.com/LinkedListLLC/cyrus/pull/26))
+- `docs/fork-inventory.md` — every change this fork carries, why it exists, and the plan that rebuilt it as four clean branches on upstream v0.2.67. ([CYR-48](https://linear.app/linkedlist/issue/CYR-48))
+- `FORK_DEVELOPMENT.md` — installing and debugging this fork locally. ([#25](https://github.com/LinkedListLLC/cyrus/pull/25))
+- `packages/core/src/shell-command-policy.ts` — one engine-agnostic shell matcher, so a command refused on Claude is refused on Grok for the same reason. ([CYR-20](https://linear.app/linkedlist/issue/CYR-20), [#24](https://github.com/LinkedListLLC/cyrus/pull/24))
+- `docs/upstream/allowed-tools-fallback-unreachable.md` — a write-up of the upstream defect behind CYR-28. Not filed upstream yet. ([CYR-28](https://linear.app/linkedlist/issue/CYR-28), [#24](https://github.com/LinkedListLLC/cyrus/pull/24))
+
+### Changed
+- User-facing output follows ASD-STE100 Simplified Technical English (Issue 9). Code, identifiers and product copy are exempt. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
+- Every pull request targets this fork. `gh pr create` without `--repo` targets the upstream default remote. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
 
 ## [0.2.67] - 2026-07-25
 
