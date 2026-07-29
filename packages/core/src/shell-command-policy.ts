@@ -25,25 +25,48 @@ function splitRule(rule: string): { head: string; args?: string } {
 	return { head: match[1], args: match[3] };
 }
 
+/** What a scan of a shell command found in it. */
+export interface ShellCommandScan {
+	/** Every command the string would run, in order. */
+	segments: string[];
+	/**
+	 * True when the string redirects a stream to or from a file, or uses
+	 * process substitution (`<(…)`, `>(…)`).
+	 *
+	 * A redirection is a write that no segment names. `git diff HEAD > ~/.bashrc`
+	 * splits into the single segment `git diff HEAD > ~/.bashrc`, which a
+	 * `Bash(git diff:*)` prefix grant matches — so a session allowed to read a
+	 * diff could write any file on the box. Segment matching cannot see this,
+	 * because the capability is in the operator, not in the command name.
+	 */
+	hasRedirection: boolean;
+}
+
 /**
- * Split a shell command into the individual commands it will actually run.
+ * Scan a shell command for the commands it runs and the redirections it opens.
  *
  * Matching a grant against the raw string only ever examines the *first*
  * command: under `Bash(git diff:*)`, `git diff HEAD && sed -i s/a/b/ f` reads as
  * an allowed `git diff` — the very in-place-edit escape this policy exists to
  * close, caught only when it happens to be the first word. So every command has
  * to be checked, which means every command has to be found first: the operators
- * `;` `&&` `||` `|` `&` and newlines separate them, and `$(…)`/backticks hide
- * more of them inside an otherwise-innocent argument.
+ * `;` `&&` `||` `|` `&` and newlines separate them, and `$(…)`, backticks and
+ * `<(…)`/`>(…)` hide more of them inside an otherwise-innocent argument.
+ *
+ * Redirections are reported rather than split out. They run no new command, so
+ * there is no segment to match them against — but `>` is the same capability as
+ * the `Bash(tee:*)` we deny, in one character. Callers enforcing a narrowed
+ * grant refuse on `hasRedirection`; see {@link commandMatchesAllowedBash}.
  *
  * Quote-aware, because an operator inside quotes is data, not a separator.
  * Returns null when the command cannot be parsed — an unterminated quote or
  * substitution — so the caller can fail closed rather than guess.
  */
-export function splitShellCommands(command: string): string[] | null {
+export function scanShellCommand(command: string): ShellCommandScan | null {
 	const segments: string[] = [];
 	let current = "";
 	let quote: '"' | "'" | null = null;
+	let hasRedirection = false;
 
 	const flush = () => {
 		const trimmed = current.trim();
@@ -51,12 +74,44 @@ export function splitShellCommands(command: string): string[] | null {
 		current = "";
 	};
 
-	/** Index of the `)` closing the `(` at `open`, or -1. */
+	/**
+	 * Index of the `)` closing the `(` at `open`, or -1.
+	 *
+	 * Quote- and escape-aware: `$(echo ")")` closes at the last `)`, not at the
+	 * quoted one. Getting this wrong truncates the body, which changes what the
+	 * nested parse sees.
+	 */
 	const findClose = (open: number): number => {
 		let depth = 0;
+		let inner: '"' | "'" | null = null;
 		for (let j = open; j < command.length; j++) {
-			if (command[j] === "(") depth++;
-			else if (command[j] === ")" && --depth === 0) return j;
+			const c = command[j];
+			if (c === "\\" && inner !== "'") {
+				j++;
+				continue;
+			}
+			if (inner) {
+				if (c === inner) inner = null;
+				continue;
+			}
+			if (c === '"' || c === "'") {
+				inner = c;
+				continue;
+			}
+			if (c === "(") depth++;
+			else if (c === ")" && --depth === 0) return j;
+		}
+		return -1;
+	};
+
+	/** Index of the next backtick that is not escaped, or -1. */
+	const findBacktick = (from: number): number => {
+		for (let j = from; j < command.length; j++) {
+			if (command[j] === "\\") {
+				j++;
+				continue;
+			}
+			if (command[j] === "`") return j;
 		}
 		return -1;
 	};
@@ -74,11 +129,19 @@ export function splitShellCommands(command: string): string[] | null {
 		}
 
 		// Command substitution runs everywhere except inside single quotes.
-		if (quote !== "'" && (char === "`" || (char === "$" && next === "("))) {
+		// `<(…)` and `>(…)` run a command exactly as `$(…)` does, so they get
+		// the same treatment: the inner command is extracted and matched. They
+		// also open a pipe, so they count as a redirection.
+		const isProcessSubstitution =
+			(char === "<" || char === ">") && next === "(";
+		if (
+			quote !== "'" &&
+			(char === "`" || (char === "$" && next === "(") || isProcessSubstitution)
+		) {
 			const inner =
 				char === "`"
 					? (() => {
-							const end = command.indexOf("`", i + 1);
+							const end = findBacktick(i + 1);
 							return end === -1
 								? null
 								: { body: command.slice(i + 1, end), end };
@@ -90,9 +153,10 @@ export function splitShellCommands(command: string): string[] | null {
 								: { body: command.slice(i + 2, end), end };
 						})();
 			if (!inner) return null;
-			const nested = splitShellCommands(inner.body);
+			const nested = scanShellCommand(inner.body);
 			if (nested === null) return null;
-			segments.push(...nested);
+			segments.push(...nested.segments);
+			if (nested.hasRedirection || isProcessSubstitution) hasRedirection = true;
 			// The substitution's *value* is an argument to the outer command.
 			current += " ";
 			i = inner.end;
@@ -127,10 +191,20 @@ export function splitShellCommands(command: string): string[] | null {
 		if (char === "&") {
 			// `2>&1` and `&>file` are redirections, not a background operator.
 			if (command[i - 1] === ">" || next === ">") {
+				hasRedirection = true;
 				current += char;
 				continue;
 			}
 			flush();
+			continue;
+		}
+		if (char === "<" || char === ">") {
+			// `>`, `>>`, `<`, `<<` and `<<<` all move a stream between a command
+			// and a file. None of them starts a new command, so the operator and
+			// its target stay in the current segment; the flag is what the caller
+			// acts on.
+			hasRedirection = true;
+			current += char;
 			continue;
 		}
 
@@ -139,7 +213,42 @@ export function splitShellCommands(command: string): string[] | null {
 
 	if (quote) return null; // unterminated quote
 	flush();
-	return segments;
+	return { segments, hasRedirection };
+}
+
+/**
+ * Split a shell command into the individual commands it will actually run.
+ *
+ * Thin wrapper over {@link scanShellCommand} for callers that only need the
+ * commands. It discards `hasRedirection`, so a caller enforcing a narrowed
+ * grant should use the scan directly and fail closed on it.
+ */
+export function splitShellCommands(command: string): string[] | null {
+	return scanShellCommand(command)?.segments ?? null;
+}
+
+/**
+ * Arguments that make an otherwise read-only command write a file.
+ *
+ * `git diff --output=/root/.bashrc` opens no redirection and runs no second
+ * command, so neither the segment split nor `hasRedirection` sees it: the
+ * segment is `git diff --output=…`, which a `Bash(git diff:*)` prefix grant
+ * matches. The write is in an option, and options are per-tool.
+ *
+ * This list is therefore **not** a boundary, and must not be read as one. It
+ * covers the flags that the granted git/gh inspection commands actually accept,
+ * so that the shipped read-only presets do not have an obvious one-flag escape.
+ * A tool with a differently-spelled output flag still gets through. See
+ * {@link commandMatchesAllowedBash} for what this layer is and is not.
+ */
+const FILE_WRITING_ARGUMENT =
+	/^(?:-o|-O|--out|--output|--output-file|--outfile|--output-directory|--log-file|--dump-header|--write-out)(?:=|$)/;
+
+/** Does any argument of this segment name a file to write? */
+function writesFileByArgument(segment: string): boolean {
+	return segment
+		.split(/\s+/)
+		.some((token) => FILE_WRITING_ARGUMENT.test(token.replace(/^["']/, "")));
 }
 
 const REGEXP_SPECIALS = /[.*+?^${}()|[\]\\]/g;
@@ -179,7 +288,24 @@ export function compileBashPattern(args: string): RegExp | "match-all" {
  * Does a shell command match the allow-list's scoped Bash grants?
  *
  * Every command the string would run must be named by a grant — a chain is only
- * as permitted as its least-permitted link.
+ * as permitted as its least-permitted link. On top of that the command must not
+ * redirect a stream, and no segment may carry a file-writing option flag,
+ * because both write files that no grant ever named.
+ *
+ * ## What this layer is worth
+ *
+ * It is a shell-string matcher, and a shell-string matcher is best-effort. It
+ * refuses the routes we know about: a second command, a substitution, a
+ * redirection, and the output flags the granted commands accept. It cannot
+ * promise that a command whose *name* looks read-only is read-only, because
+ * that is a property of the tool, not of its name — every `git` subcommand this
+ * repository grants takes some spelling of "write the result to a file".
+ *
+ * So do not read a narrowed `Bash(...)` grant as "this session cannot write".
+ * It is a strong filter over an intentionally small set of granted commands.
+ * The boundary that does not depend on knowing every flag is the OS sandbox
+ * (`sandbox.filesystem` — bubblewrap on Linux, the macOS sandbox), which
+ * refuses the write itself rather than the string that asks for it.
  *
  * @param allow Tool rules in Claude's vocabulary. Non-`Bash` entries are
  * ignored, so the caller can pass a whole `allowedTools` list.
@@ -200,11 +326,16 @@ export function commandMatchesAllowedBash(
 	}
 	if (matchers.length === 0) return false;
 
-	const segments = splitShellCommands(command);
+	const scan = scanShellCommand(command);
 	// Unparseable, or nothing recognisable to run: we cannot say what this
 	// would do, so we refuse it.
-	if (segments === null || segments.length === 0) return false;
-	return segments.every((segment) =>
+	if (scan === null || scan.segments.length === 0) return false;
+	// A redirection writes a file that no grant named. Refusing it costs a
+	// narrowed session nothing — an inspection command has no reason to
+	// redirect, and `2>/dev/null` is not worth a hole the width of `>`.
+	if (scan.hasRedirection) return false;
+	if (scan.segments.some(writesFileByArgument)) return false;
+	return scan.segments.every((segment) =>
 		matchers.some((matcher) => matcher.test(segment)),
 	);
 }

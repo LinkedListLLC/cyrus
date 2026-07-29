@@ -35,6 +35,23 @@ export function parseToolListEnv(
 }
 
 /**
+ * Collapse a configured-but-empty tool list to `undefined`.
+ *
+ * `parseToolListEnv` does this for the env-backed fields. The fields that come
+ * straight from `config.json` need it too: a `"slackAllowedTools": []` in the
+ * file is exactly the shape the ladder misreads, and it reaches the resolver
+ * untouched otherwise. Blank entries are dropped for the same reason
+ * `parseToolListEnv` drops them — `[""]` is a one-entry list naming no tool.
+ */
+function normalizeToolList(value: string[] | undefined): string[] | undefined {
+	if (value === undefined) return undefined;
+	const tools = value
+		.map((tool) => tool.trim())
+		.filter((tool) => tool.length > 0);
+	return tools.length > 0 ? tools : undefined;
+}
+
+/**
  * Resolve the platform tool-permission fields of `EdgeWorkerConfig` from the
  * environment and the on-disk edge config.
  *
@@ -42,12 +59,18 @@ export function parseToolListEnv(
  * config the CLI actually builds rather than a hand-written literal — the
  * shape of this object is the whole bug this function exists to prevent.
  *
- * **Every field is `undefined` when nothing is configured — never `[]`.**
+ * **Every field is `undefined` when nothing is configured — never `[]`.** That
+ * holds for all four fields, not only the two the environment can set:
  * `ToolPermissionResolver` walks a priority ladder and treats a present
  * `linearAllowedTools` as "the operator chose this list". An empty array is
  * truthy, so it short-circuits the ladder one rung above the platform default
  * and hands the session an empty allow-list. Since `tools` is derived from
  * `allowedTools`, that resolves to a session with no tools at all.
+ *
+ * The resolver guards every rung on `isConfigured` as well. Both layers hold
+ * the invariant on purpose: this one keeps `[]` out of the config object, so a
+ * future consumer that checks truthiness — as `buildChatAllowedTools` once
+ * did — cannot be misled by a shape that never arrives.
  */
 export function resolveToolPermissionConfig(
 	edgeConfig: Pick<
@@ -68,14 +91,12 @@ export function resolveToolPermissionConfig(
 	return {
 		linearAllowedTools:
 			parseToolListEnv(env.LINEAR_ALLOWED_TOOLS) ??
-			edgeConfig.linearAllowedTools ??
-			undefined,
-		slackAllowedTools: edgeConfig.slackAllowedTools,
-		githubAllowedTools: edgeConfig.githubAllowedTools,
+			normalizeToolList(edgeConfig.linearAllowedTools),
+		slackAllowedTools: normalizeToolList(edgeConfig.slackAllowedTools),
+		githubAllowedTools: normalizeToolList(edgeConfig.githubAllowedTools),
 		defaultDisallowedTools:
 			parseToolListEnv(env.DISALLOWED_TOOLS) ??
-			edgeConfig.defaultDisallowedTools ??
-			undefined,
+			normalizeToolList(edgeConfig.defaultDisallowedTools),
 	};
 }
 

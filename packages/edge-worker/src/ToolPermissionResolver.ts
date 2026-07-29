@@ -130,23 +130,28 @@ export class ToolPermissionResolver {
 	public buildAllowedTools(
 		repositories: RepositoryConfig | RepositoryConfig[],
 		promptType?: PromptType,
+		platformDefault?: readonly string[],
 	): string[] {
 		const repoArray = Array.isArray(repositories)
 			? repositories
 			: [repositories];
+		const workspaceDefault =
+			platformDefault ?? this.config.linearAllowedTools ?? undefined;
 
 		if (repoArray.length === 0) {
 			// Non-empty guard, same as step 4 of `buildAllowedToolsForRepo`:
 			// `??` only catches null/undefined, so a configured-but-empty list
 			// would pass straight through as an empty allow-list.
-			const baseTools = this.config.linearAllowedTools?.length
-				? this.config.linearAllowedTools
-				: [...LINEAR_DEFAULT_ALLOWED_TOOLS];
+			const baseTools =
+				workspaceDefault !== undefined &&
+				ToolPermissionResolver.isConfigured(workspaceDefault)
+					? workspaceDefault
+					: LINEAR_DEFAULT_ALLOWED_TOOLS;
 			return [...new Set(baseTools)];
 		}
 
 		const perRepoTools = repoArray.map((repo) =>
-			this.buildAllowedToolsForRepo(repo, promptType),
+			this.buildAllowedToolsForRepo(repo, promptType, workspaceDefault),
 		);
 		const unionTools = [...new Set(perRepoTools.flat())];
 
@@ -167,24 +172,46 @@ export class ToolPermissionResolver {
 	 * we fall back to `GITHUB_DEFAULT_ALLOWED_TOOLS`. Per-repository
 	 * `allowedTools` overrides still take precedence — same priority chain
 	 * as Linear, just with a different platform default at the bottom.
+	 *
+	 * The platform default is threaded through as an argument rather than
+	 * swapped onto `this.config.linearAllowedTools` and restored in a `finally`.
+	 * That swap was safe only while the call chain stayed synchronous; the day
+	 * anything in it awaited, a concurrent Linear session resolving in the gap
+	 * would silently get the GitHub default. Passing it down cannot leak.
 	 */
 	public buildGithubAllowedTools(
 		repository: RepositoryConfig,
 		promptType?: PromptType,
 	): string[] {
 		const platformDefault =
-			this.config.githubAllowedTools &&
-			this.config.githubAllowedTools.length > 0
+			this.config.githubAllowedTools !== undefined &&
+			ToolPermissionResolver.isConfigured(this.config.githubAllowedTools)
 				? this.config.githubAllowedTools
 				: [...GITHUB_DEFAULT_ALLOWED_TOOLS];
 
-		const originalDefault = this.config.linearAllowedTools;
-		this.config.linearAllowedTools = platformDefault;
-		try {
-			return this.buildAllowedTools(repository, promptType);
-		} finally {
-			this.config.linearAllowedTools = originalDefault;
-		}
+		return this.buildAllowedTools(repository, promptType, platformDefault);
+	}
+
+	/**
+	 * Is this allowed-tools setting configured to something?
+	 *
+	 * Every rung of both ladders asks the same question, and an empty array is
+	 * the answer that breaks it: `[]` is truthy, so an unguarded rung returns
+	 * it, the ladder stops, and the session gets an empty allow-list. Since
+	 * `tools` now derives from `allowedTools`, that is not "no auto-approvals" —
+	 * it is a session with no built-in tools at all.
+	 *
+	 * "Configured to nothing" is not a state any caller means to express. It is
+	 * what an absent setting collapses into when a config file carries the key
+	 * with an empty value, so every rung treats it as absent and falls through.
+	 * A preset *string* is configured when it is non-empty.
+	 */
+	private static isConfigured(
+		value: string | readonly string[] | undefined,
+	): boolean {
+		return typeof value === "string"
+			? value.length > 0
+			: Boolean(value?.length);
 	}
 
 	/**
@@ -194,11 +221,15 @@ export class ToolPermissionResolver {
 	private buildAllowedToolsForRepo(
 		repository: RepositoryConfig,
 		promptType?: PromptType,
+		workspaceDefault?: readonly string[],
 	): string[] {
 		const effectivePromptType =
 			promptType === "graphite-orchestrator" ? "orchestrator" : promptType;
 
-		// Priority order:
+		// Priority order. Every rung is guarded on `isConfigured`, never on
+		// truthiness — the CYR-28 bug was one unguarded `[]` at rung 4, and the
+		// same shape at rungs 1-3 produces the same silent empty session.
+		//
 		// 1. Repository-specific prompt type configuration
 		const promptConfig = effectivePromptType
 			? repository.labelPrompts?.[effectivePromptType]
@@ -207,17 +238,21 @@ export class ToolPermissionResolver {
 			promptConfig && !Array.isArray(promptConfig)
 				? promptConfig.allowedTools
 				: undefined;
-		if (promptAllowedTools) {
+		if (
+			promptAllowedTools !== undefined &&
+			ToolPermissionResolver.isConfigured(promptAllowedTools)
+		) {
 			return this.resolveToolPreset(promptAllowedTools);
 		}
 		// 2. Global prompt type defaults
+		const promptDefaultAllowedTools = effectivePromptType
+			? this.config.promptDefaults?.[effectivePromptType]?.allowedTools
+			: undefined;
 		if (
-			effectivePromptType &&
-			this.config.promptDefaults?.[effectivePromptType]?.allowedTools
+			promptDefaultAllowedTools !== undefined &&
+			ToolPermissionResolver.isConfigured(promptDefaultAllowedTools)
 		) {
-			return this.resolveToolPreset(
-				this.config.promptDefaults[effectivePromptType].allowedTools,
-			);
+			return this.resolveToolPreset(promptDefaultAllowedTools);
 		}
 		// 3. Repository-level allowed tools (verbatim — no platform-default
 		//    merging; if the operator narrows the list, they get the narrow
@@ -227,21 +262,19 @@ export class ToolPermissionResolver {
 		//    same thing here as they do at steps 1-2. Without this, a preset
 		//    string would be taken as one literal tool name and silently
 		//    derive to zero built-in tools.
-		if (repository.allowedTools) {
+		if (
+			repository.allowedTools !== undefined &&
+			ToolPermissionResolver.isConfigured(repository.allowedTools)
+		) {
 			return this.resolveToolPreset(repository.allowedTools);
 		}
-		// 4. Workspace default allowed tools (the platform default the
-		//    surrounding `buildAllowedTools` / `buildGithubAllowedTools`
-		//    swapped in, if any).
-		//
-		//    Guarded on non-empty: an empty array is truthy, so an unguarded
-		//    check would return `[]` and make step 5 unreachable, handing the
-		//    session an empty allow-list (and, since `tools` derives from
-		//    `allowedTools`, no tools at all). "Configured to nothing" is not
-		//    a state any caller means to express — it is what an absent
-		//    setting used to collapse into.
-		if (this.config.linearAllowedTools?.length) {
-			return this.config.linearAllowedTools;
+		// 4. Workspace default allowed tools — the platform default
+		//    `buildGithubAllowedTools` passed down, or `linearAllowedTools`.
+		if (
+			workspaceDefault !== undefined &&
+			ToolPermissionResolver.isConfigured(workspaceDefault)
+		) {
+			return [...workspaceDefault];
 		}
 		// 5. Final fallback — Linear platform default.
 		return [...LINEAR_DEFAULT_ALLOWED_TOOLS];

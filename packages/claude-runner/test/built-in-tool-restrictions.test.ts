@@ -139,6 +139,22 @@ describe("deriveBuiltInTools", () => {
 		expect(deriveBuiltInTools(["mcp__linear"])).toEqual([]);
 	});
 
+	it("distinguishes 'granted nothing' from 'not configured'", () => {
+		// The two ends of the range must not collapse into each other. `[]` means
+		// no built-in tools; `undefined` means leave the SDK default alone. If the
+		// SDK falsy-checked `tools`, the strictest input would become the most
+		// permissive output — so the distinction is asserted here and the SDK's
+		// side of it is quoted in `deriveBuiltInTools`' docblock:
+		//
+		//   tools.length === 0  ->  args.push("--tools", "")
+		//   tools === undefined ->  flag omitted
+		//
+		// Re-read that argv builder when `@anthropic-ai/claude-agent-sdk` is
+		// bumped; this assertion cannot see a change on the SDK's side.
+		expect(deriveBuiltInTools([])).toEqual([]);
+		expect(deriveBuiltInTools(undefined)).toBeUndefined();
+	});
+
 	it("recognizes every tool in the readOnly preset", () => {
 		for (const entry of readOnlyTools) {
 			const name = entry.replace(/\(.*\)$/, "");
