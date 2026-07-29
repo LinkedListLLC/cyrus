@@ -273,11 +273,13 @@ export {
 } from "./security/index.js";
 // Shell-command matching for scoped `Bash(...)` grants. Shared by the Claude
 // and Grok runners so a command refused on one engine is refused on the other.
+export type { ShellCommandScan } from "./shell-command-policy.js";
 export {
 	commandMatchesAllowedBash,
 	compileBashPattern,
 	grantsUnrestrictedBash,
 	hasBashGrant,
+	scanShellCommand,
 	splitShellCommands,
 } from "./shell-command-policy.js";
 // Simple Agent Runner types

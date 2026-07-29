@@ -219,19 +219,44 @@ export const GITHUB_DEFAULT_ALLOWED_TOOLS = [
 /**
  * Allowed tools for `reviewOnStatus` review sessions.
  *
- * A review session exists to *read* a diff and *say* what it thinks. It is
- * read-only by construction: no `Edit`, no `Write`, no `NotebookEdit`, and no
- * general `Bash`. The only shell commands granted are read-only git/gh
- * inspection commands, because the bare read-only toolset has no `Bash` at all
- * and a reviewer that cannot run `git diff` cannot review anything.
+ * A review session exists to *read* a diff and *say* what it thinks. It gets no
+ * `Edit`, no `Write`, no `NotebookEdit`, and no general `Bash`. The only shell
+ * commands granted are read-only git/gh inspection commands, because the bare
+ * read-only toolset has no `Bash` at all and a reviewer that cannot run
+ * `git diff` cannot review anything.
  *
- * `mcp__linear` is included deliberately — the review needs to read the issue
- * and post its verdict back to Linear. That is the one write this session is
- * allowed to make, and it writes to the issue tracker, never to code.
+ * ## How strong the read-only property is
  *
- * Pair this with {@link REVIEW_DISALLOWED_TOOLS}: `disallowedTools` is an
- * instant deny that takes precedence over any allow rule, so the write tools
- * stay blocked even if a repository's own `allowedTools` is merged in.
+ * Strong at the tool layer, best-effort at the shell layer. The distinction
+ * matters, so it is stated rather than implied:
+ *
+ * - The **built-in write tools** are absent from this list *and* named in
+ *   {@link REVIEW_DISALLOWED_TOOLS}. A deny rule is an instant refusal that
+ *   beats every allow rule, including one merged in from a repository's own
+ *   `allowedTools` or a settings file. That part is a property of the config.
+ * - The **shell grants** are a string match over a command line. It refuses a
+ *   second command, a substitution, a redirection and the output flags these
+ *   commands accept (see `commandMatchesAllowedBash` in `shell-command-policy`),
+ *   but it cannot promise that a command whose name reads as inspection is
+ *   incapable of writing — `git diff`, `git log` and `git show` all take some
+ *   spelling of "write the result to a file". Do not read `Bash(git diff:*)` as
+ *   "cannot write".
+ *
+ * The boundary that holds without enumerating flags is the OS sandbox
+ * (`sandbox.filesystem`). Where a review session must be *guaranteed* unable to
+ * write, that is the layer to configure; this list is what keeps an honest
+ * reviewer inside its lane and closes the routes we know of.
+ *
+ * ## Why the Linear tools are enumerated
+ *
+ * The review needs to read the issue and post its verdict, which is a write to
+ * the issue tracker rather than to code. But the `mcp__linear` *prefix* grants
+ * more than that: the server also exposes `merge_diff`, which merges the very
+ * change under review, plus `submit_diff_review`, `save_issue` (state,
+ * assignee, title), `save_project` and `delete_comment`. And an `mcp__*` rule
+ * is the one thing `deriveBuiltInDisallowedTools` never emits, so no deny layer
+ * below this line catches it. So the tools are listed one by one, and the list
+ * is the claim.
  */
 export const REVIEW_ALLOWED_TOOLS = [
 	// Read-only code access
@@ -260,8 +285,20 @@ export const REVIEW_ALLOWED_TOOLS = [
 	"TaskList",
 	"ToolSearch",
 
-	// Issue tracker — read the issue, post the review
-	"mcp__linear",
+	// Issue tracker — read the issue and its thread, read the diff, post the
+	// review. Enumerated, not the `mcp__linear` prefix: see the docblock.
+	"mcp__linear__get_issue",
+	"mcp__linear__list_issues",
+	"mcp__linear__list_comments",
+	"mcp__linear__save_comment",
+	"mcp__linear__get_diff",
+	"mcp__linear__get_diff_threads",
+	"mcp__linear__save_diff_comment",
+	"mcp__linear__get_document",
+	"mcp__linear__list_documents",
+	"mcp__linear__get_issue_status",
+	"mcp__linear__get_user",
+	"mcp__linear__search_documentation",
 ] as const;
 
 /**
@@ -395,12 +432,40 @@ export const REVIEW_DISALLOWED_TOOLS = [
  * Deny rules also apply to every link of a compound command, so
  * `sed 's/…/…/' && mv tmp real` is refused on the strength of the `sed` entry.
  *
- * ## Why these commands
+ * ## What this list is for, and what it is not
+ *
+ * It covers the read-only pre-approval measured above, and nothing else. That
+ * is its whole job: for a command Claude Code waves through before
+ * `canUseTool` runs, a deny rule is the only layer left. Because
+ * `deriveBuiltInDisallowedTools` only emits these for a *restricted* persona
+ * (rule 2 there), and a restricted persona's `Bash` is already gated by
+ * `canUseTool` for everything the classifier does *not* pre-approve, this list
+ * is the patch over exactly that gap.
+ *
+ * It is **not** what makes "this session cannot write" true. A blocklist of
+ * command names never is. It does not list `bash`, `sh`, `zsh`, `python`,
+ * `node`, `npx`, `ruby`, `make`, `xargs` or `find -exec`, and any one of those
+ * gives back everything the list removes. Completing it is not possible, so it
+ * is not attempted. The property that does not depend on enumeration is the OS
+ * sandbox (`sandbox.filesystem`), which refuses the write itself.
  *
  * The shell is the escape hatch that makes every other restriction cosmetic: a
  * session denied `Edit` can still edit in place with `sed -i`, commit by
  * pointing git at another directory, or merge a PR through the GitHub API.
- * Each entry below closes one of those routes.
+ * Each entry below closes one of those routes for the pre-approved case.
+ *
+ * ## Deliberate over-blocking
+ *
+ * Four entries also refuse read-only invocations, because the deny vocabulary
+ * matches a command prefix and cannot see an argument's intent:
+ * `Bash(git branch:*)` (bare `git branch` lists), `Bash(git config:*)`
+ * (`--get` reads), `Bash(git remote:*)` (bare `git remote` lists), and
+ * `Bash(gh api:*)` (a GET reads). `gh api` is the costly one — it removes a
+ * lot of legitimate read-only work from a reviewer. The trade is accepted:
+ * each of those commands has a mutating form that is one flag away from the
+ * reading form, and a restricted persona that needs one back can be granted it
+ * explicitly — rule 3 of `deriveBuiltInDisallowedTools` never denies what the
+ * allow-list granted.
  *
  * @see {@link REVIEW_DISALLOWED_TOOLS} for the review persona's fixed list.
  */

@@ -319,9 +319,81 @@ describe("ToolPermissionResolver — platform-default allowedTools fallback", ()
 
 			expect(allowed.length).toBeGreaterThan(0);
 			expect(deriveBuiltInTools(allowed) ?? []).not.toHaveLength(0);
-			// The swap-and-restore around the Linear ladder must leave the
-			// original workspace value untouched.
+			// The GitHub platform default is threaded through as an argument, so
+			// the workspace value is never touched at all.
 			expect(config.linearAllowedTools).toEqual([]);
+		});
+	});
+
+	/**
+	 * The CYR-28 guard belongs on every rung, not just the one that bit us.
+	 *
+	 * Rung 4 was the rung with the reported bug, so it was the rung that got the
+	 * `?.length` guard. Rungs 1-3 kept their truthiness checks, which means a
+	 * `labelPrompts.debugger.allowedTools: []` or a repo-level `allowedTools: []`
+	 * still produced the exact failure CYR-28 describes — one rung higher up,
+	 * and with no test to catch it.
+	 */
+	describe("an empty list at any rung falls through, not just rung 4", () => {
+		it("rung 1: an empty labelPrompts allowedTools falls through", () => {
+			const resolver = new ToolPermissionResolver(
+				makeEdgeWorkerConfig({ linearAllowedTools: [] }),
+				noopLogger,
+			);
+			const repository = makeRepository({
+				labelPrompts: {
+					debugger: { labels: ["Bug"], allowedTools: [] },
+				},
+			} as Partial<RepositoryConfig>);
+
+			const allowed = resolver.buildAllowedTools(repository, "debugger");
+
+			expect(allowed).toEqual([...LINEAR_DEFAULT_ALLOWED_TOOLS]);
+			expect(deriveBuiltInTools(allowed) ?? []).not.toHaveLength(0);
+		});
+
+		it("rung 2: an empty promptDefaults allowedTools falls through", () => {
+			const resolver = new ToolPermissionResolver(
+				makeEdgeWorkerConfig({
+					linearAllowedTools: [],
+					promptDefaults: { scoper: { allowedTools: [] } },
+				} as Partial<EdgeWorkerConfig>),
+				noopLogger,
+			);
+
+			const allowed = resolver.buildAllowedTools(makeRepository(), "scoper");
+
+			expect(allowed).toEqual([...LINEAR_DEFAULT_ALLOWED_TOOLS]);
+			expect(deriveBuiltInTools(allowed) ?? []).not.toHaveLength(0);
+		});
+
+		it("rung 3: an empty repo-level allowedTools falls through", () => {
+			const resolver = new ToolPermissionResolver(
+				makeEdgeWorkerConfig({ linearAllowedTools: [] }),
+				noopLogger,
+			);
+			const repository = makeRepository({ allowedTools: [] });
+
+			const allowed = resolver.buildAllowedTools(repository);
+
+			expect(allowed).toEqual([...LINEAR_DEFAULT_ALLOWED_TOOLS]);
+			expect(deriveBuiltInTools(allowed) ?? []).not.toHaveLength(0);
+		});
+
+		it("a configured non-empty list at rung 1 still wins", () => {
+			const resolver = new ToolPermissionResolver(
+				makeEdgeWorkerConfig({ linearAllowedTools: ["Read"] }),
+				noopLogger,
+			);
+			const repository = makeRepository({
+				labelPrompts: {
+					scoper: { labels: ["Scope"], allowedTools: "readOnly" },
+				},
+			} as Partial<RepositoryConfig>);
+
+			expect(resolver.buildAllowedTools(repository, "scoper")).toEqual([
+				...READONLY_CODE_TOOLS,
+			]);
 		});
 	});
 });

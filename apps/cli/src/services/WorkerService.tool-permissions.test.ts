@@ -140,6 +140,38 @@ describe("resolveToolPermissionConfig", () => {
 			}).defaultDisallowedTools,
 		).toBeUndefined();
 	});
+
+	it("holds the never-[] invariant for the fields the env cannot set", () => {
+		// The docblock promises this of *every* field. Only the two env-backed
+		// ones went through a normaliser, so a `"slackAllowedTools": []` in
+		// config.json reached the resolver as the very shape the ladder
+		// misreads — the invariant was stated but not held.
+		const config = resolveToolPermissionConfig(
+			{
+				linearAllowedTools: [],
+				slackAllowedTools: [],
+				githubAllowedTools: [],
+				defaultDisallowedTools: [],
+			} as unknown as EdgeConfig,
+			{},
+		);
+
+		expect(config.linearAllowedTools).toBeUndefined();
+		expect(config.slackAllowedTools).toBeUndefined();
+		expect(config.githubAllowedTools).toBeUndefined();
+		expect(config.defaultDisallowedTools).toBeUndefined();
+	});
+
+	it("drops blank entries from a config-file list", () => {
+		const config = resolveToolPermissionConfig(
+			{
+				slackAllowedTools: [" Read ", "", "  "],
+			} as unknown as EdgeConfig,
+			{},
+		);
+
+		expect(config.slackAllowedTools).toEqual(["Read"]);
+	});
 });
 
 describe("parseToolListEnv", () => {

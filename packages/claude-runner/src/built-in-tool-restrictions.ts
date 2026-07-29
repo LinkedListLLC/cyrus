@@ -162,6 +162,23 @@ export interface DeriveBuiltInToolsOptions {
  * Returns `undefined` when `allowedTools` is `undefined`, which leaves the SDK
  * default (all built-in tools) in place — an explicit "no list configured, do
  * not restrict" signal, distinct from an empty list meaning "grant nothing".
+ *
+ * The empty case is the one worth checking rather than assuming, because if the
+ * SDK falsy-checked `tools` then `[]` — the strictest possible input — would
+ * silently become the most permissive output. It does not. From the SDK's argv
+ * builder (`sdk.mjs`, 0.3.220):
+ *
+ * ```js
+ * if (tools !== undefined)
+ *   if (Array.isArray(tools))
+ *     if (tools.length === 0) args.push("--tools", "");
+ *     else args.push("--tools", tools.join(","));
+ * ```
+ *
+ * `[]` becomes an explicit `--tools ""` — no built-in tools — and only
+ * `undefined` skips the flag. So both ends of the range fail in the safe
+ * direction. Asserted in `built-in-tool-restrictions.test.ts`; re-check it when
+ * the SDK is bumped.
  */
 export function deriveBuiltInTools(
 	allowedTools: readonly string[] | undefined,
