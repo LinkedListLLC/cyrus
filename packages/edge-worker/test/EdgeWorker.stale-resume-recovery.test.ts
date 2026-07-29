@@ -374,16 +374,49 @@ describe("EdgeWorker - stale resume recovery (CYR-53)", () => {
 		});
 	});
 
-	it("keeps the follow-up SDK throw out of the error reporter", async () => {
-		const errorSpy = vi.spyOn((edgeWorker as any).logger, "error");
-
-		await (edgeWorker as any).handleClaudeError(
-			new Error(
-				"Claude Code returned an error result: No conversation found with session ID: 48614c4d",
-			),
+	const missingConversationError = () =>
+		new Error(
+			"Claude Code returned an error result: No conversation found with session ID: 48614c4d",
 		);
 
+	it("keeps the follow-up SDK throw out of the error reporter, once a recovery ran", async () => {
+		const errorSpy = vi.spyOn((edgeWorker as any).logger, "error");
+
+		// The suppression is licensed by a recovery having actually happened.
+		(edgeWorker as any).pendingStaleResumeThrows = 1;
+
+		await (edgeWorker as any).handleClaudeError(missingConversationError());
+
 		expect(errorSpy).not.toHaveBeenCalled();
+		// One throw per recovery: the licence is spent.
+		expect((edgeWorker as any).pendingStaleResumeThrows).toBe(0);
+	});
+
+	it("reports the same error when no recovery was registered for it", async () => {
+		const errorSpy = vi.spyOn((edgeWorker as any).logger, "error");
+
+		// Suppressing this unconditionally meant the user got no error activity
+		// *and* no retry — silence, which is the failure CYR-53 was about. If
+		// nothing recovered, it has to surface.
+		expect((edgeWorker as any).pendingStaleResumeThrows).toBe(0);
+
+		await (edgeWorker as any).handleClaudeError(missingConversationError());
+
+		expect(errorSpy).toHaveBeenCalled();
+		expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
+			"no recovery was registered",
+		);
+	});
+
+	it("does not suppress a second throw on one recovery", async () => {
+		const errorSpy = vi.spyOn((edgeWorker as any).logger, "error");
+		(edgeWorker as any).pendingStaleResumeThrows = 1;
+
+		await (edgeWorker as any).handleClaudeError(missingConversationError());
+		expect(errorSpy).not.toHaveBeenCalled();
+
+		await (edgeWorker as any).handleClaudeError(missingConversationError());
+		expect(errorSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("still reports genuinely unhandled errors", async () => {

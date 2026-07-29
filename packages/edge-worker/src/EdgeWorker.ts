@@ -213,6 +213,23 @@ type CyrusToolsMcpContext = {
  * How the Claude CLI reports that it cannot find the conversation it was
  * asked to resume, for example:
  * "No conversation found with session ID: 48614c4d-0cb5-4c32-97e2-67e3c6b2f33c".
+ *
+ * ## Two things this pattern does not do
+ *
+ * **It is a wording match, and the wording is not a contract.** The Claude CLI
+ * moves often — this repository bumps it regularly — and a rephrasing on their
+ * side disables the recovery silently, putting CYR-53 straight back with no
+ * signal. There is no error code or structured field to key on instead; this
+ * was checked. So it is a known fragility rather than a solved problem: if
+ * sessions start dead-ending on resume again after an SDK bump, check this
+ * string against the CLI's current output *first*.
+ *
+ * **It only matches Claude.** `clearRunnerSessionIds` clears the Gemini, Codex,
+ * Cursor and Grok conversation ids too, which reads as multi-runner intent, but
+ * only Claude's phrasing is recognised — so only Claude sessions ever recover.
+ * The other runners' equivalents have not been captured. Clearing all five is
+ * still correct once a recovery does fire (the fresh session must not resume any
+ * of them), it just cannot be read as "this works on every runner".
  */
 const MISSING_CONVERSATION_PATTERN = /No conversation found with session ID/i;
 
@@ -250,6 +267,19 @@ export class EdgeWorker extends EventEmitter {
 	private lastStopTimeBySession: Map<string, number> = new Map(); // Maps session ID to timestamp of last stop signal (for double-stop detection)
 	private staleResumeRecoveryBySession: Map<string, () => Promise<void>> =
 		new Map(); // Maps session ID to a one-shot retry for the in-flight resume, used when the agent CLI has lost the conversation
+	/**
+	 * Recoveries that have run and whose trailing SDK throw is still expected.
+	 *
+	 * The SDK throws the missing-conversation error immediately *after* the
+	 * result message `recoverFromStaleResume` acts on, and `handleClaudeError`
+	 * receives no session id — so this counter is what connects the two.
+	 *
+	 * It exists because suppressing that error unconditionally also swallowed it
+	 * when **no** recovery was registered: the user then got no error activity
+	 * *and* no retry, which is silence — the one failure mode CYR-53 was about.
+	 * Suppression now requires that a recovery actually ran.
+	 */
+	private pendingStaleResumeThrows = 0;
 	private warmInstances: Map<string, WarmQuery> = new Map(); // Pre-warmed Claude sessions keyed by agentSessionId
 	private issueTrackers: Map<string, IIssueTrackerService> = new Map(); // one issue tracker per Linear workspace (keyed by linearWorkspaceId)
 	private linearEventTransport: LinearEventTransport | null = null; // Single event transport for webhook delivery
@@ -879,6 +909,29 @@ export class EdgeWorker extends EventEmitter {
 			const secret = useDirectWebhooks
 				? process.env.LINEAR_WEBHOOK_SECRET || ""
 				: process.env.CYRUS_API_KEY || "";
+
+			// Refuse to start rather than verify against an empty secret.
+			//
+			// `|| ""` above used to be the whole story: with `LINEAR_DIRECT_WEBHOOKS=true`
+			// and no `LINEAR_WEBHOOK_SECRET`, the HMAC was computed with an empty
+			// key — which anyone can also compute, so every forged webhook verified.
+			// The self-host Docker image makes that combination reachable: it bakes
+			// in `WEBHOOK_IP_VALIDATION=false` (correct behind Traefik, where the
+			// source IP is the proxy's edge) on the stated grounds that "the
+			// signature is the real authentication". If the signature can be forged,
+			// both controls are off and the endpoint is open.
+			//
+			// Loud and immediate: a webhook endpoint that authenticates nothing is
+			// not a degraded mode to run in.
+			if (useDirectWebhooks && !secret) {
+				throw new Error(
+					"LINEAR_DIRECT_WEBHOOKS=true requires LINEAR_WEBHOOK_SECRET. " +
+						"Without it, signatures would be verified against an empty key, " +
+						"which any caller can forge — so every webhook would be accepted. " +
+						"Set LINEAR_WEBHOOK_SECRET to the signing secret shown in Linear's " +
+						"webhook settings, or unset LINEAR_DIRECT_WEBHOOKS to use proxy mode.",
+				);
+			}
 
 			this.linearEventTransport = new LinearEventTransport({
 				fastifyServer: this.sharedApplicationServer.getFastifyInstance(),
@@ -6061,6 +6114,11 @@ ${taskSection}`;
 			`The agent has no conversation for the resumed session ID — starting a fresh session with the full issue context`,
 		);
 
+		// Licence for `handleClaudeError` to swallow the throw that follows this
+		// result. Granted here so that an unrecovered occurrence still reaches
+		// the error reporter.
+		this.pendingStaleResumeThrows += 1;
+
 		try {
 			await this.agentSessionManager.createThoughtActivity(
 				sessionId,
@@ -6099,11 +6157,22 @@ ${taskSection}`;
 
 		// The SDK throws this straight after the error result that
 		// `recoverFromStaleResume` already acted on. It is a known, recovered
-		// condition, so keep it out of the error reporter.
+		// condition, so keep it out of the error reporter — but only when a
+		// recovery genuinely ran. Suppressing it unconditionally meant that an
+		// occurrence with no registered recovery produced no error activity and
+		// no retry: silence, which is the failure this whole path exists to end.
 		if (MISSING_CONVERSATION_PATTERN.test(error.message)) {
-			this.logger.warn(
-				"Claude has no conversation for the resumed session ID:",
-				error.message,
+			if (this.pendingStaleResumeThrows > 0) {
+				this.pendingStaleResumeThrows -= 1;
+				this.logger.warn(
+					"Claude has no conversation for the resumed session ID (recovered, starting fresh):",
+					error.message,
+				);
+				return;
+			}
+			this.logger.error(
+				"Claude has no conversation for the resumed session ID, and no recovery was registered for it:",
+				error,
 			);
 			return;
 		}
@@ -7688,9 +7757,22 @@ ${input.userComment}
 						(session.metadata?.model as string | undefined) ||
 						(repoConfig.claudeDefaultModel as string | undefined) ||
 						(repoConfig.model as string | undefined) ||
-						// Match the live default path (RunnerSelectionService): the
-						// "opus" alias always resolves to the latest Opus that the
-						// bundled Claude Code knows, so this never goes stale.
+						// Match the live default path (`RunnerSelectionService`), which
+						// also defaults to the bare `opus` alias. Warm-start sessions
+						// diverging from cold-start ones on model choice is the bug
+						// this replaces a pinned `claude-opus-4-6` to avoid.
+						//
+						// The trade is explicit: the alias never goes stale, and in
+						// exchange an SDK bump can change which model warm-start
+						// sessions run — different cost, different behaviour, no
+						// changelog entry. Accepted because the alternative is a pin
+						// that silently rots into an older model than the rest of the
+						// product uses, and because agreeing with the cold path
+						// matters more than pinning either.
+						//
+						// Verified on `@anthropic-ai/claude-agent-sdk@0.3.220`
+						// (2026-07-29): `--model opus` resolves to `claude-opus-5`.
+						// Re-check on the next bump.
 						"opus";
 
 					// Build allowed/disallowed tools — same as what buildAgentRunnerConfig() uses.

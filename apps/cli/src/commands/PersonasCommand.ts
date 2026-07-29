@@ -1,7 +1,16 @@
+import { dirname } from "node:path";
+import {
+	deriveBuiltInDisallowedTools,
+	deriveBuiltInTools,
+} from "cyrus-claude-runner";
 import type { EdgeWorkerConfig, ILogger, RepositoryConfig } from "cyrus-core";
 import { LogLevel } from "cyrus-core";
 import type { PromptType } from "cyrus-edge-worker";
-import { PromptBuilder, ToolPermissionResolver } from "cyrus-edge-worker";
+import {
+	GitService,
+	PromptBuilder,
+	ToolPermissionResolver,
+} from "cyrus-edge-worker";
 import { BaseCommand } from "./ICommand.js";
 
 /**
@@ -58,10 +67,34 @@ export class PersonasCommand extends BaseCommand {
 		// CLI argument is signalled by `labels === undefined`, never by `[]`.
 		const scenarios = labels ? [labels] : deriveScenarios(selected);
 
+		// Built once, outside the loop. These were constructed per
+		// (repository, label set) pair, with `gitService: undefined as never` —
+		// a cast that silences the type system on exactly the seam this command
+		// promises to keep honest, and that breaks the moment
+		// `determineSystemPromptFromLabels` touches a dependency. A real
+		// `GitService` costs nothing here: its only uses on the prompt path are
+		// `sanitizeBranchName` and `branchExists`, both of which work.
+		const resolvers: Resolvers = {
+			promptBuilder: new PromptBuilder({
+				logger: SILENT_LOGGER,
+				repositories: new Map(selected.map((r) => [r.id, r])),
+				issueTrackers: new Map(),
+				gitService: new GitService(
+					// `config.json` lives at `<cyrusHome>/config.json`.
+					{ cyrusHome: dirname(this.app.config.getConfigPath()) },
+					SILENT_LOGGER,
+				),
+			}),
+			toolResolver: new ToolPermissionResolver(
+				this.app.config.load() as unknown as EdgeWorkerConfig,
+				SILENT_LOGGER,
+			),
+		};
+
 		const results: PersonaResult[] = [];
 		for (const repository of selected) {
 			for (const labelSet of scenarios) {
-				results.push(await this.resolve(repository, labelSet));
+				results.push(await this.resolve(resolvers, repository, labelSet));
 			}
 		}
 
@@ -76,20 +109,10 @@ export class PersonasCommand extends BaseCommand {
 	}
 
 	private async resolve(
+		{ promptBuilder, toolResolver }: Resolvers,
 		repository: RepositoryConfig,
 		labels: string[],
 	): Promise<PersonaResult> {
-		const promptBuilder = new PromptBuilder({
-			logger: SILENT_LOGGER,
-			repositories: new Map(),
-			issueTrackers: new Map(),
-			gitService: undefined as never,
-		});
-		const toolResolver = new ToolPermissionResolver(
-			this.app.config.load() as unknown as EdgeWorkerConfig,
-			SILENT_LOGGER,
-		);
-
 		const match = await promptBuilder.determineSystemPromptFromLabels(labels, [
 			repository,
 		]);
@@ -100,6 +123,23 @@ export class PersonasCommand extends BaseCommand {
 			repository,
 			promptType,
 		);
+
+		// `allowedTools` is only an auto-approve list. What the session can
+		// actually *see* is `deriveBuiltInTools(allowed)`, and what it is refused
+		// is `disallowed` plus `deriveBuiltInDisallowedTools(allowed)`. Reporting
+		// the pre-derivation lists made this command disagree with the runtime it
+		// exists to check: a persona configured `Edit(src/**)` was reported as
+		// having `Edit`, while the derivation withholds `Edit` entirely because an
+		// argument-narrowed grant on a mutating tool is unenforceable. A drift
+		// detector that has drifted is worse than none, because it gets trusted.
+		const dropped: Array<{ entry: string; reason: string }> = [];
+		const effectiveTools =
+			deriveBuiltInTools(allowed, {
+				onDropped: (entry, reason) => dropped.push({ entry, reason }),
+			}) ?? [];
+		const effectiveDisallowed = [
+			...new Set([...disallowed, ...deriveBuiltInDisallowedTools(allowed)]),
+		];
 
 		return {
 			repository: repository.id,
@@ -116,10 +156,20 @@ export class PersonasCommand extends BaseCommand {
 			allowedCount: allowed.length,
 			allowed,
 			disallowed,
-			canWrite: allowed.some((t) =>
-				["Write", "Edit", "NotebookEdit", "MultiEdit"].includes(t),
+			effectiveTools,
+			effectiveDisallowed,
+			dropped,
+			// Derived from `effectiveTools`, which carries bare names. Comparing
+			// against `allowed` needed the argument stripped — `availableTools`
+			// ships `Edit(**)` and `Write(**)`, not the bare names, so exact
+			// equality reported `canWrite: false` for a repository configured
+			// `["Read(**)","Edit(**)","Write(**)","Bash"]` and the `safe`-preset
+			// warning never fired. (`MultiEdit` was also in that comparison and is
+			// not in `availableTools` at all.)
+			canWrite: effectiveTools.some((t) =>
+				["Write", "Edit", "NotebookEdit"].includes(t),
 			),
-			shell: classifyShell(allowed),
+			shell: classifyShell(allowed, effectiveTools),
 		};
 	}
 
@@ -150,9 +200,18 @@ export class PersonasCommand extends BaseCommand {
 				`  write:    ${r.canWrite ? "YES — Write/Edit present" : "no"}`,
 			);
 			this.logger.info(`  shell:    ${SHELL_LABEL[r.shell]}`);
+			// Both numbers, because they differ and the difference is the point:
+			// the first is what the config says, the second is what the session
+			// gets after `deriveBuiltInTools` / `deriveBuiltInDisallowedTools`.
 			this.logger.info(
-				`  tools:    ${r.allowedCount} allowed, ${r.disallowed.length} denied`,
+				`  tools:    ${r.allowedCount} allowed (auto-approve), ${r.disallowed.length} denied in config`,
 			);
+			this.logger.info(
+				`  effective: ${r.effectiveTools.length} built-in tools visible, ${r.effectiveDisallowed.length} denied`,
+			);
+			for (const { entry, reason } of r.dropped) {
+				this.logger.warn(`  ⚠ dropped ${entry}: ${reason}`);
+			}
 
 			for (const warning of warningsFor(r)) {
 				this.logger.warn(`  ⚠ ${warning}`);
@@ -171,6 +230,12 @@ export class PersonasCommand extends BaseCommand {
 	}
 }
 
+/** The real resolvers this command dry-runs against, constructed once. */
+interface Resolvers {
+	promptBuilder: PromptBuilder;
+	toolResolver: ToolPermissionResolver;
+}
+
 type ShellAccess = "full" | "narrowed" | "none";
 
 const SHELL_LABEL: Record<ShellAccess, string> = {
@@ -187,8 +252,16 @@ export interface PersonaResult {
 	version: string | null;
 	missingVersionTag: boolean;
 	allowedCount: number;
+	/** The configured allow-list — an auto-approve list, not a capability set. */
 	allowed: string[];
+	/** The configured deny-list, before the derived rules are added. */
 	disallowed: string[];
+	/** `deriveBuiltInTools(allowed)` — the built-ins the session can see. */
+	effectiveTools: string[];
+	/** `disallowed` + `deriveBuiltInDisallowedTools(allowed)` — the real deny set. */
+	effectiveDisallowed: string[];
+	/** Entries the derivation withheld, with the reason it gives operators. */
+	dropped: Array<{ entry: string; reason: string }>;
 	canWrite: boolean;
 	shell: ShellAccess;
 }
@@ -222,6 +295,13 @@ export function warningsFor(r: PersonaResult): string[] {
 		);
 	}
 
+	// A grant the config makes and the derivation withholds. Operators read
+	// `allowedTools` as a capability list, so a silent drop is exactly the drift
+	// this command exists to surface — one layer below where it used to look.
+	for (const { entry, reason } of r.dropped) {
+		warnings.push(`\`${entry}\` is configured but not granted: ${reason}`);
+	}
+
 	return warnings;
 }
 
@@ -250,10 +330,28 @@ export function deriveScenarios(repositories: RepositoryConfig[]): string[][] {
 	return [...[...labels].sort().map((l) => [l]), []];
 }
 
-export function classifyShell(allowed: string[]): ShellAccess {
+/**
+ * How much shell a session really gets.
+ *
+ * `effectiveTools` decides whether there is a shell at all — a `Bash(...)` entry
+ * in `allowedTools` only means something if the derivation kept `Bash`. Given
+ * that it did, `allowed` decides whether the shell is narrowed, because that is
+ * where the scope lives; `effectiveTools` carries the bare name either way.
+ */
+export function classifyShell(
+	allowed: string[],
+	effectiveTools?: string[],
+): ShellAccess {
+	if (effectiveTools && !effectiveTools.includes("Bash")) return "none";
 	if (allowed.includes("Bash")) return "full";
-	if (allowed.some((t) => t.startsWith("Bash("))) return "narrowed";
-	return "none";
+	if (allowed.some((t) => t.startsWith("Bash("))) {
+		// `Bash(*)` / `Bash(**)` impose no real scope.
+		const scoped = allowed
+			.filter((t) => t.startsWith("Bash("))
+			.some((t) => !/^Bash\(\*+\)$/.test(t.trim()));
+		return scoped ? "narrowed" : "full";
+	}
+	return effectiveTools?.includes("Bash") ? "full" : "none";
 }
 
 export function parseArgs(args: string[]): {

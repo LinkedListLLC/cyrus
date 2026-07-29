@@ -1,7 +1,17 @@
 # Cyrus — headless self-host image (builds from source).
 # Deployed on Dokploy as a single Application (Dockerfile build type).
 # See docs/DOKPLOY.md for the full deploy runbook.
-FROM node:22-bookworm
+#
+# Every input to this build is pinned, because `pnpm install --frozen-lockfile`
+# pinning the workspace is worth little if the toolchain around it floats. Base
+# image by digest, Claude Code by version, Grok by installed-version assertion.
+# See the comment on each.
+#
+# Digest-pinned: `22-bookworm` is a moving tag, so an unpinned FROM makes the
+# image non-reproducible and lets a base change land without a commit. Resolved
+# 2026-07-29. To refresh:
+#   docker buildx imagetools inspect node:22-bookworm --format '{{.Manifest.Digest}}'
+FROM node:22-bookworm@sha256:7725a5c2c83eed1d36258c66efae14b1ceccd021db9ed1d9559d3335ed3d68ed
 
 # Runtime deps: git (clone + per-issue worktrees), jq (Claude Code stream-json
 # parsing), gh (PR creation). Installs the GitHub CLI apt repo.
@@ -15,11 +25,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # The Claude Code CLI that Cyrus drives (provides the `claude` binary on PATH).
-RUN npm install -g @anthropic-ai/claude-code
+#
+# Version-pinned, and pinned to the Claude Code that `claude-agent-sdk@0.3.220`
+# bundles — verified 2026-07-29: the SDK's own native binary reports 2.1.220.
+# Unpinned, every rebuild could pull a different Claude Code than the SDK this
+# repo tests against, and that now costs capability rather than just
+# consistency: `deriveBuiltInTools` drops any tool name absent from
+# `availableTools`, which is kept in sync with the SDK version. A CLI that
+# renamed or added a tool would have it silently withheld from every session.
+#
+# Bump this in lockstep with `@anthropic-ai/claude-agent-sdk` in
+# packages/*/package.json, and re-run ./scripts/extract-claude-tools.sh.
+RUN npm install -g @anthropic-ai/claude-code@2.1.220
 
 # The Grok Build CLI that the grok-runner drives as `grok agent stdio`.
 # xAI publishes no official npm package (`@xai/grok-cli` does not exist; the npm
 # results are third-party forks), so this is their install script.
+#
+# ⚠️ RESIDUAL RISK, NAMED: this is the one unpinned, unverified remote script
+# executed at build time. `curl | bash` from x.ai means whatever that URL serves
+# on the day of the build runs as root with full network access, and there is no
+# checksum, signature or version selector to pin against — the installer offers
+# none, and xAI publishes no artifact we could hash. It is accepted only because
+# there is no alternative distribution channel for this CLI, and it is bounded
+# two ways: `GROK_EXPECTED_VERSION` below fails the build if the resolved binary
+# is not the version we tested, so a change cannot land silently, and
+# `GROK_DISABLE_AUTOUPDATER=1` stops the binary replacing itself at runtime.
+# If xAI ever ships a versioned tarball or npm package, replace this.
 #
 # The installer keeps the real binary in $HOME/.grok/downloads and installs only
 # *symlinks* to it — both at $GROK_BIN_DIR/grok and, when running as root, at
@@ -31,6 +63,7 @@ RUN npm install -g @anthropic-ai/claude-code
 # The trailing `rm -rf /root/.grok` clears the empty directory the CLI creates on
 # its first run; leaving it would block the entrypoint's symlink and silently
 # cost us auth persistence.
+ARG GROK_EXPECTED_VERSION=0.2.114
 RUN GROK_TMP="$(mktemp -d)" \
  && HOME="$GROK_TMP" GROK_BIN_DIR="$GROK_TMP/bin" \
       bash -c 'curl -fsSL https://x.ai/cli/install.sh | bash' \
@@ -39,7 +72,18 @@ RUN GROK_TMP="$(mktemp -d)" \
  && cp "$GROK_REAL" /usr/local/bin/grok \
  && chmod +x /usr/local/bin/grok \
  && rm -rf "$GROK_TMP" \
- && grok --version \
+ # Assert the version rather than just proving the binary runs. This is the
+ # only check standing between an unpinned installer and the image, so it
+ # fails the build on a drift instead of logging it. Override with
+ # `--build-arg GROK_EXPECTED_VERSION=` (empty) to accept whatever ships.
+ && GROK_ACTUAL="$(grok --version | tr -d '\r')" \
+ && echo "grok: $GROK_ACTUAL (expected ${GROK_EXPECTED_VERSION:-any})" \
+ && if [ -n "$GROK_EXPECTED_VERSION" ] \
+      && ! echo "$GROK_ACTUAL" | grep -qF "$GROK_EXPECTED_VERSION"; then \
+      echo "ERROR: grok version drifted from the tested $GROK_EXPECTED_VERSION." >&2; \
+      echo "Re-test the grok-runner against it, then bump GROK_EXPECTED_VERSION." >&2; \
+      exit 1; \
+    fi \
  && rm -rf /root/.grok
 
 # pnpm via corepack, pinned to the repo's packageManager version.
