@@ -1,4 +1,12 @@
-import { access, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import {
+	access,
+	cp,
+	mkdir,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,5 +118,58 @@ describe("DefaultSkillsDeployer", () => {
 				expect(await exists(skillMd)).toBe(true);
 			}
 		}
+	});
+
+	it("should record every deployed skill name after the first deploy", async () => {
+		await deployer.ensureDeployed();
+
+		const recordPath = join(
+			testHome,
+			"cyrus-skills-plugin",
+			".deployed-skills.json",
+		);
+		expect(await exists(recordPath)).toBe(true);
+
+		const record = JSON.parse(await readFile(recordPath, "utf-8"));
+		expect(record).toContain("implementation");
+		expect(record).toContain("debug");
+	});
+
+	it("should backfill a new bundled skill into an install that predates it", async () => {
+		// Simulate an existing install from before some skill (e.g. a newly
+		// bundled one) existed: deploy everything except one skill, and no
+		// .deployed-skills.json record (older Cyrus versions never wrote one).
+		const pluginPath = join(testHome, "cyrus-skills-plugin");
+		const skillsPath = join(pluginPath, "skills");
+		const manifestDir = join(pluginPath, ".claude-plugin");
+		await mkdir(skillsPath, { recursive: true });
+		await mkdir(manifestDir, { recursive: true });
+		await writeFile(
+			join(manifestDir, "plugin.json"),
+			JSON.stringify({ name: "cyrus-skills" }),
+		);
+
+		const bundledEntries = await readdir(BUNDLED_SKILLS_DIR, {
+			withFileTypes: true,
+		});
+		const bundledNames = bundledEntries
+			.filter((e) => e.isDirectory() || e.isSymbolicLink())
+			.map((e) => e.name);
+		expect(bundledNames.length).toBeGreaterThan(1);
+
+		const [missingSkill, ...preExisting] = bundledNames;
+		for (const name of preExisting) {
+			await cp(join(BUNDLED_SKILLS_DIR, name), join(skillsPath, name), {
+				recursive: true,
+				dereference: true,
+			});
+		}
+
+		// No .deployed-skills.json written — this is the "legacy install" case.
+		expect(await exists(join(skillsPath, missingSkill))).toBe(false);
+
+		await deployer.ensureDeployed();
+
+		expect(await exists(join(skillsPath, missingSkill))).toBe(true);
 	});
 });
