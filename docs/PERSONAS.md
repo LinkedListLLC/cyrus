@@ -223,6 +223,16 @@ Both prompts carry the same protocol:
   the map's Backlog state in the same `save_issue` that appends to *Decisions so far*. This one is
   ours, not Matt Pocock's: Linear's GitHub integration reads identifiers out of commits and pushes
   and will silently move the map out of Backlog. Observed on Racemappr's RAC-953, 2026-07-26.
+- **A delegated ticket belongs to the session you delegated it to.**
+  `mcp__cyrus-tools__linear_agent_session_create` hands over the claim, the resolution, the close and
+  the map line, so the delegating session must not also work that ticket. It does not wait for the
+  report either: `EdgeWorker.handleResumeParentSession` resumes the parent with the child's final
+  message as a new prompt when the child finishes, so the parent keeps working its own tickets and
+  ends its turn meanwhile. Also ours, not Matt Pocock's — the interactive `/wayfinder` session has no
+  sub-agent to delegate to, while a Cyrus map session does. Observed on CYR-58, 2026-07-29: a map
+  session delegated a child ticket and then resolved the same ticket itself.
+- **`wayfinder:research` may resolve several tickets, and delegation is not a resolution** — the
+  one-ticket limit counts the tickets the session resolves itself, so one session may delegate many.
 
 These rules previously lived in a ~1,200-character `appendInstruction` string duplicated into every
 repository's config entry. They now live in the personas, and that string can be deleted.
