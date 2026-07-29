@@ -281,4 +281,66 @@ describe("GitService.createReviewWorktree", () => {
 		expect(existsSync(join(retried.path, "scratch.txt"))).toBe(false);
 		expect(git("status --porcelain", retried.path)).toBe("");
 	});
+
+	/**
+	 * `EdgeWorker.reviewWorktrees` is in-memory and `onComplete` deliberately
+	 * keeps the checkout, so a restart between "review finished" and "issue
+	 * reached a terminal state" stranded a directory *and* a git registration
+	 * with nothing left to remove either. The collision check above cannot help:
+	 * the directory name carries a session id and is never reused.
+	 */
+	describe("pruneReviewWorktrees", () => {
+		it("removes a worktree stranded by a previous process, and its registration", async () => {
+			const worktree = await gitService.createReviewWorktree({
+				repository,
+				reviewId: "session-stranded-1",
+				issueIdentifier: "TEST-9",
+				branchName: "feature-x",
+			});
+			expect(existsSync(worktree.path)).toBe(true);
+			expect(git("worktree list --porcelain", repoPath)).toContain(
+				worktree.path,
+			);
+
+			// A fresh process: nothing in memory owns this directory.
+			gitService.pruneReviewWorktrees([repository]);
+
+			expect(existsSync(worktree.path)).toBe(false);
+			expect(git("worktree list --porcelain", repoPath)).not.toContain(
+				worktree.path,
+			);
+		});
+
+		it("removes several at once and leaves the reviews dir usable", async () => {
+			const first = await gitService.createReviewWorktree({
+				repository,
+				reviewId: "session-a",
+				issueIdentifier: "TEST-1",
+				branchName: "feature-x",
+			});
+			const second = await gitService.createReviewWorktree({
+				repository,
+				reviewId: "session-b",
+				issueIdentifier: "TEST-2",
+				branchName: "feature-x",
+			});
+
+			gitService.pruneReviewWorktrees([repository]);
+
+			expect(existsSync(first.path)).toBe(false);
+			expect(existsSync(second.path)).toBe(false);
+
+			const fresh = await gitService.createReviewWorktree({
+				repository,
+				reviewId: "session-c",
+				issueIdentifier: "TEST-3",
+				branchName: "feature-x",
+			});
+			expect(existsSync(fresh.path)).toBe(true);
+		});
+
+		it("is a no-op when no review has ever run", () => {
+			expect(() => gitService.pruneReviewWorktrees([repository])).not.toThrow();
+		});
+	});
 });

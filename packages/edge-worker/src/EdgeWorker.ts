@@ -671,6 +671,9 @@ export class EdgeWorker extends EventEmitter {
 		// Load persisted state for each repository
 		await this.loadPersistedState();
 
+		// Reclaim review worktrees stranded by a previous process.
+		this.pruneOrphanedReviewWorktrees();
+
 		// Pre-warm the 30 most recent Claude sessions in the background
 		// so their first query after restart has near-zero cold-start latency.
 		// Disabled by default; opt in with CYRUS_ENABLE_WARM_SESSIONS=1.
@@ -4204,6 +4207,10 @@ ${taskSection}`;
 	 * issues: de-dup on the webhook key (catches a redelivery of the *same*
 	 * transition) and a per-issue in-flight guard (catches a genuinely new
 	 * transition arriving while a review is still running).
+	 *
+	 * Order matters between them: the in-flight guard runs first, because it is
+	 * the only one of the two that should be able to decline *without* spending
+	 * the de-dup key. See the comment at the guards.
 	 */
 	private async maybeStartStatusReview(
 		webhook: IssueUpdateWebhook,
@@ -4239,18 +4246,30 @@ ${taskSection}`;
 			return;
 		}
 
+		// In-flight is checked FIRST, and returns without marking anything.
+		//
+		// The two guards catch different things, but only one of them consumes
+		// state. Marking the key before declining meant a genuinely new transition
+		// that arrived while a review was still running spent its own de-dup key
+		// on the way to being refused — and Linear will not mint a *new* key for a
+		// transition that already happened. So that transition could never be
+		// reviewed: not when the running review finished, not on a redelivery.
+		// Declining an in-flight review has to leave the key unspent so a
+		// redelivery after the current review completes can still act on it.
+		if (this.reviewSessions.hasReviewInFlight(issueId)) {
+			this.logger.info(
+				`Review already in progress for ${issueIdentifier} — not starting another. ` +
+					`This trigger's de-dup key is left unconsumed, so a redelivery after the ` +
+					`current review finishes can still start one.`,
+			);
+			return;
+		}
+
 		const webhookKey = `review:${webhook.createdAt}:${issueId}`;
 		if (!this.reviewSessions.markWebhookProcessed(webhookKey)) {
 			this.logger.info(
 				`No review for ${issueIdentifier}: duplicate trigger (key=${webhookKey}) — ` +
 					`Linear delivers at-least-once, so this is expected on a redelivery.`,
-			);
-			return;
-		}
-
-		if (this.reviewSessions.hasReviewInFlight(issueId)) {
-			this.logger.info(
-				`Review already in progress for ${issueIdentifier} — not starting another`,
 			);
 			return;
 		}
@@ -4518,7 +4537,17 @@ ${taskSection}`;
 					undefined, // resumeSessionId — a review never resumes
 					undefined, // labels — bypasses label-driven runner/model selection
 					undefined, // issueDescription — no description-tag selectors either
-					100, // maxTurns
+					// maxTurns. Half the 200 a build session gets: a review reads one
+					// diff and says what it thinks, so a review still going at 100
+					// turns has lost the thread rather than found something deep.
+					//
+					// On exhaustion the SDK throws, `initializeReviewRunner`'s catch
+					// posts the error as a thought activity, and `finishReviewSession`
+					// releases the guard — so the thread gets whatever the review had
+					// already posted plus an explicit failure, never silence. That is
+					// the reason for a bound at all: an unbounded review that wanders
+					// would burn tokens and say nothing.
+					100,
 					linearWorkspaceId,
 					this.buildSkillSessionContext(repository, fullIssue, session),
 				);
@@ -4559,6 +4588,40 @@ ${taskSection}`;
 				)
 				.catch(() => {});
 			this.finishReviewSession(sessionId);
+		}
+	}
+
+	/**
+	 * Remove review worktrees left behind by a previous process.
+	 *
+	 * `reviewWorktrees` is in-memory, and `onComplete` deliberately keeps the
+	 * checkout so a follow-up comment can resume in it — so a directory's whole
+	 * lifetime hangs on process memory. Two things strand one permanently:
+	 *
+	 * - the process restarts between the review finishing and the issue reaching
+	 *   a terminal state (the only thing that calls `finishReviewSession`);
+	 * - the issue never reaches a terminal state at all.
+	 *
+	 * Either way a directory under `worktrees/reviews/` survives *and* stays
+	 * registered as a git worktree in the main repository, and nothing removed
+	 * it. `ReviewSessionTracker` documents its own restart limit and self-heals;
+	 * this one did neither.
+	 *
+	 * Called from `start()`, before any review can be minted. At that moment
+	 * `reviewWorktrees` is necessarily empty, so *every* directory under
+	 * `reviews/` belongs to a dead process — there is no live review to
+	 * misidentify. `git worktree prune` then clears the stale registrations.
+	 *
+	 * Best-effort throughout: a failure here must not stop the worker starting.
+	 */
+	private pruneOrphanedReviewWorktrees(): void {
+		if (this.reviewWorktrees.size > 0) return;
+		try {
+			this.gitService.pruneReviewWorktrees([...this.repositories.values()]);
+		} catch (error) {
+			this.logger.warn(
+				`Could not prune stranded review worktrees (non-fatal): ${(error as Error).message}`,
+			);
 		}
 	}
 

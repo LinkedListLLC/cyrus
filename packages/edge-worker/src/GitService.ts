@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -1050,13 +1050,20 @@ export class GitService {
 			repository.baseBranch,
 		];
 
+		// `execFileSync` with an argv array, not an interpolated shell string.
+		// `sanitizeBranchName` handles `branchName`, which is the webhook-derived
+		// value — but `repository.baseBranch` and `workspacePath` are interpolated
+		// raw, and this is the only new code path that assembles a shell command
+		// from data that came in over the wire. Passing argv removes the class
+		// outright rather than depending on the sanitizer staying complete.
 		let checkoutRef: string | undefined;
 		for (const candidate of candidates) {
 			try {
-				execSync(`git rev-parse --verify --quiet "${candidate}^{commit}"`, {
-					cwd: repoPath,
-					stdio: "pipe",
-				});
+				execFileSync(
+					"git",
+					["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`],
+					{ cwd: repoPath, stdio: "pipe" },
+				);
 				checkoutRef = candidate;
 				break;
 			} catch {
@@ -1103,10 +1110,11 @@ export class GitService {
 		this.logger.info(
 			`Creating detached review worktree at ${workspacePath} from ${checkoutRef}`,
 		);
-		execSync(`git worktree add --detach "${workspacePath}" "${checkoutRef}"`, {
-			cwd: repoPath,
-			stdio: "pipe",
-		});
+		execFileSync(
+			"git",
+			["worktree", "add", "--detach", workspacePath, checkoutRef],
+			{ cwd: repoPath, stdio: "pipe" },
+		);
 
 		return {
 			path: workspacePath,
@@ -1125,7 +1133,7 @@ export class GitService {
 	 */
 	removeReviewWorktree(worktree: ReviewWorktree): void {
 		try {
-			execSync(`git worktree remove --force "${worktree.path}"`, {
+			execFileSync("git", ["worktree", "remove", "--force", worktree.path], {
 				cwd: worktree.repositoryPath,
 				stdio: "pipe",
 				timeout: 30_000,
@@ -1152,6 +1160,77 @@ export class GitService {
 			});
 		} catch {
 			// Best-effort: prune failure is not critical.
+		}
+	}
+
+	/**
+	 * Remove every review worktree found on disk, plus its git registration.
+	 *
+	 * Called once at startup, and *only* then. `EdgeWorker.reviewWorktrees` is an
+	 * in-memory map, so at startup it is empty — which makes every directory
+	 * under `reviews/` the property of a process that no longer exists. There is
+	 * no live review to misidentify, which is what makes a blanket sweep safe
+	 * here and unsafe anywhere else.
+	 *
+	 * Without it, two ordinary situations strand a directory forever:
+	 * the process restarts after a review finished but before the issue reached a
+	 * terminal state (the only trigger for `finishReviewSession`), or the issue
+	 * never reaches a terminal state at all. Both leave a checkout on disk *and*
+	 * a registered worktree in the main repository, and the collision check in
+	 * `createReviewWorktree` cannot reclaim them because the directory name
+	 * carries a session id and is never reused.
+	 *
+	 * Best-effort per entry: one failure must not stop the rest, or the worker.
+	 */
+	pruneReviewWorktrees(
+		repositories: Array<
+			Pick<RepositoryConfig, "repositoryPath" | "workspaceBaseDir">
+		>,
+	): void {
+		// A reviews dir can be shared by several repositories. Map each to the
+		// repository paths that could own its git registration, because
+		// `git worktree remove` has to run inside the owning repository.
+		const dirToRepoPaths = new Map<string, string[]>();
+		for (const repository of repositories) {
+			const reviewsDir = join(
+				repository.workspaceBaseDir || getDefaultWorktreesDir(this.cyrusHome),
+				"reviews",
+			);
+			const paths = dirToRepoPaths.get(reviewsDir) ?? [];
+			paths.push(repository.repositoryPath);
+			dirToRepoPaths.set(reviewsDir, paths);
+		}
+
+		for (const [reviewsDir, repoPaths] of dirToRepoPaths) {
+			if (!existsSync(reviewsDir)) continue;
+
+			let entries: string[];
+			try {
+				entries = readdirSync(reviewsDir);
+			} catch (error) {
+				this.logger.warn(
+					`Could not scan ${reviewsDir} for stranded review worktrees: ${(error as Error).message}`,
+				);
+				continue;
+			}
+
+			for (const entry of entries) {
+				const path = join(reviewsDir, entry);
+				this.logger.info(
+					`Removing review worktree stranded by a previous process: ${path}`,
+				);
+				for (const repositoryPath of repoPaths) {
+					this.removeReviewWorktree({
+						path,
+						checkoutRef: "unknown",
+						repositoryPath,
+						usedFallbackRef: false,
+					});
+					// The directory is gone once the owning repository released it;
+					// the remaining candidates would only re-prune.
+					if (!existsSync(path)) break;
+				}
+			}
 		}
 	}
 

@@ -47,8 +47,40 @@ describe("REVIEW_ALLOWED_TOOLS", () => {
 		expect(allowed).toContain("Bash(git diff:*)");
 	});
 
-	it("keeps mcp__linear so the review can be posted", () => {
-		expect(allowed).toContain("mcp__linear");
+	it("can read the issue and post the review", () => {
+		expect(allowed).toContain("mcp__linear__get_issue");
+		expect(allowed).toContain("mcp__linear__list_comments");
+		expect(allowed).toContain("mcp__linear__save_comment");
+	});
+
+	it("grants Linear tools one by one, never the mcp__linear prefix", () => {
+		// The prefix grant also handed the reviewer `merge_diff` — merging the very
+		// change it was created to comment on — plus `save_issue` (state,
+		// assignee, title), `save_project` and `delete_comment`. And `mcp__*` is
+		// the one rule shape `deriveBuiltInDisallowedTools` never emits, so no
+		// deny layer below this list catches it.
+		expect(allowed).not.toContain("mcp__linear");
+
+		const linearTools = allowed.filter((tool) =>
+			tool.startsWith("mcp__linear"),
+		);
+		expect(linearTools.length).toBeGreaterThan(0);
+		for (const tool of linearTools) {
+			expect(tool.startsWith("mcp__linear__")).toBe(true);
+		}
+	});
+
+	it("grants no Linear tool that writes code or moves the issue", () => {
+		for (const forbidden of [
+			"mcp__linear__merge_diff",
+			"mcp__linear__submit_diff_review",
+			"mcp__linear__resolve_diff_thread",
+			"mcp__linear__save_issue",
+			"mcp__linear__save_project",
+			"mcp__linear__delete_comment",
+		]) {
+			expect(allowed).not.toContain(forbidden);
+		}
 	});
 
 	it("is tighter than the full Linear session toolset", () => {
