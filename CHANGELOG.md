@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Every Cyrus session, on any repository, can now use the [`i-have-adhd`](https://github.com/ayghri/i-have-adhd) skill. This skill shapes replies for a reader with ADHD. It leads with the next action. It numbers multi-step work. It restates progress every turn. It gives concrete time estimates. The skill stays off by default. Run `/i-have-adhd` to turn it on. Say "stop adhd mode" to turn it off. This change also fixes a defect in default-skill deployment: an existing Cyrus install did not receive new default skills after its first start. It now receives them on its next start. ([CYR-56](https://linear.app/linkedlist/issue/CYR-56), [#29](https://github.com/LinkedListLLC/cyrus/pull/29))
+
+### Added
 - New per-repository `reviewOnStatus` setting: name a Linear workflow state (for example `"In Review"`) and Cyrus automatically reviews the pull request when an issue moves into it. The review runs as a separate agent session against a clean checkout of the PR head, so it is an independent review rather than the author checking its own work, and posts a structured verdict (Blocking / Non-blocking / Nits) back to the issue. The review session cannot edit files, commit, push, or merge. Omit the setting to keep the previous behavior. ([CYR-5](https://linear.app/linkedlist/issue/CYR-5), [#2](https://github.com/LinkedListLLC/cyrus/pull/2))
 
 ### Added
