@@ -158,6 +158,40 @@ describe("PromptBuilder — Wayfinder persona routing", () => {
 		).resolves.toBe("scoper");
 	});
 
+	it("prefers scoper over debugger and builder when an issue carries both", async () => {
+		// The ordering comment states a principle — a label describing *how the
+		// session must behave* beats one describing the subject matter — and
+		// `scoper` is read-only and plan-only, so the principle covers it. The
+		// array put it after `debugger` and `builder` anyway, so a ticket labelled
+		// both `Bug` and a scoper label started building instead of scoping.
+		const builder = makeBuilder();
+		const repository = makeRepository(WAYFINDER_LABEL_PROMPTS);
+
+		await expect(
+			builder
+				.determineSystemPromptFromLabels(["Bug", "Scoper"], [repository])
+				.then((r) => r?.type),
+		).resolves.toBe("scoper");
+		await expect(
+			builder
+				.determineSystemPromptFromLabels(["Feature", "Scoper"], [repository])
+				.then((r) => r?.type),
+		).resolves.toBe("scoper");
+	});
+
+	it("still prefers wayfinder over scoper", async () => {
+		// Wayfinder stays the most constraining: one ticket, never self-answer.
+		const builder = makeBuilder();
+		const repository = makeRepository(WAYFINDER_LABEL_PROMPTS);
+
+		const result = await builder.determineSystemPromptFromLabels(
+			["Scoper", "wayfinder:research"],
+			[repository],
+		);
+
+		expect(result?.type).toBe("wayfinder");
+	});
+
 	it("matches wayfinder labels case-insensitively", async () => {
 		const builder = makeBuilder();
 		const repository = makeRepository(WAYFINDER_LABEL_PROMPTS);

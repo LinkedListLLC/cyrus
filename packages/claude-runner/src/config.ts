@@ -12,7 +12,32 @@
  */
 
 /**
- * List of all available tools in Claude Code
+ * List of all available tools in Claude Code.
+ *
+ * ## Keep this in sync with the bundled Claude Code — it is load-bearing
+ *
+ * `KNOWN_BUILT_IN_TOOLS` is derived from this array, and `deriveBuiltInTools`
+ * **drops** any name not in it. Since `tools` is now the option that decides
+ * what the model can see at all, a name this list has not heard of is withheld
+ * from every session rather than merely left off an auto-approve list. A stale
+ * catalog therefore costs capability, silently. That is the price of the
+ * fail-closed rule, and it is why `CLAUDE.md` note 7 makes the refresh
+ * mandatory on every SDK bump:
+ *
+ *     ./scripts/extract-claude-tools.sh
+ *
+ * ## Last verified
+ *
+ * `@anthropic-ai/claude-agent-sdk@0.3.220` (Claude Code 2.1.220), 2026-07-29.
+ * The script's init block reported 28 tools. Every one of them is in this list —
+ * nothing 0.3.220 offers is being withheld.
+ *
+ * One entry here is *not* in that init block: `RemoteTrigger`. It is kept
+ * deliberately. It is surfaced to live Cyrus sessions as a deferred tool (it
+ * appears in the session tool list at runtime), so it is gated rather than gone,
+ * and the init block of a bare `claude -p` does not enumerate it. Keeping a name
+ * that turns out not to exist costs nothing — the grant is a no-op — whereas
+ * dropping a name that does exist withholds the tool.
  */
 export const availableTools = [
 	// File system tools

@@ -244,18 +244,29 @@ export class PromptBuilder {
 		// Check each prompt type for matching labels.
 		//
 		// ORDER IS SIGNIFICANT — first match wins, and an issue routinely carries
-		// more than one of these labels. The Wayfinder pair comes first because a
-		// `wayfinder:*` label describes *how the session must behave* (plan, do
-		// not build; one ticket; never self-answer), which has to beat a label
-		// that merely describes the subject matter. A ticket labelled both `Bug`
-		// and `wayfinder:research` is a research question about a bug, not a
-		// licence to start fixing it.
+		// more than one of these labels. The rule is: a label describing *how the
+		// session must behave* beats a label describing *what the work is about*.
+		// A ticket labelled both `Bug` and `wayfinder:research` is a research
+		// question about a bug, not a licence to start fixing it.
+		//
+		// So the constraining personas come first:
+		// - `wayfinder` / `wayfinder-task` — plan, do not build; one ticket;
+		//   never self-answer.
+		// - `scoper` — read-only and plan-only, by the same reasoning. It used to
+		//   sit *after* `debugger` and `builder`, which contradicted the rule this
+		//   comment states: a ticket labelled both `Bug` and a scoper label
+		//   started building instead of scoping.
+		//
+		// Then the personas that describe subject matter, which do build.
+		// `orchestrator` stays last: it is the coordinating fallback, and it also
+		// matches a hardcoded label, so putting it earlier would let that
+		// hardcoded match pre-empt an explicit per-repo label.
 		const promptTypes = [
 			"wayfinder",
 			"wayfinder-task",
+			"scoper",
 			"debugger",
 			"builder",
-			"scoper",
 			"orchestrator",
 		] as const;
 

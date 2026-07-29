@@ -19,6 +19,9 @@ function makeResult(overrides: Partial<PersonaResult> = {}): PersonaResult {
 		allowedCount: 30,
 		allowed: ["Read", "Edit", "Write", "Bash", "Task"],
 		disallowed: [],
+		effectiveTools: ["Bash", "Edit", "Glob", "Grep", "Read", "Task", "Write"],
+		effectiveDisallowed: [],
+		dropped: [],
 		canWrite: true,
 		shell: "full",
 		...overrides,
@@ -36,6 +39,75 @@ describe("classifyShell", () => {
 
 	it("reports no shell when no Bash entry of any form is present", () => {
 		expect(classifyShell(["Read", "Write", "Edit", "Task"])).toBe("none");
+	});
+});
+
+describe("classifyShell agrees with the derivation, not just the config", () => {
+	it("reports no shell when the derivation withheld Bash", () => {
+		// `allowedTools` can name Bash while `deriveBuiltInTools` withholds it.
+		// The config list is not the capability list.
+		expect(classifyShell(["Read", "Bash"], ["Glob", "Grep", "Read"])).toBe(
+			"none",
+		);
+	});
+
+	it("keeps narrowed when the derivation kept Bash", () => {
+		expect(
+			classifyShell(
+				["Read", "Bash(git log:*)"],
+				["Bash", "Glob", "Grep", "Read"],
+			),
+		).toBe("narrowed");
+	});
+
+	it("treats Bash(*) as unrestricted rather than narrowed", () => {
+		expect(classifyShell(["Read", "Bash(*)"], ["Bash", "Read"])).toBe("full");
+		expect(classifyShell(["Read", "Bash(**)"], ["Bash", "Read"])).toBe("full");
+	});
+});
+
+describe("canWrite is read off the effective toolset", () => {
+	it("sees a write grant that carries an argument", () => {
+		// `availableTools` ships `Edit(**)` and `Write(**)`, not the bare names,
+		// so the old exact-equality check against `allowed` reported
+		// `canWrite: false` for a repository configured
+		// `["Read(**)","Edit(**)","Write(**)","Bash"]` — and the CYR-21 warning
+		// this command was written for never fired. (`all` only reported true by
+		// accident, because `NotebookEdit` happens to be listed bare.)
+		const result = makeResult({
+			allowed: ["Read(**)", "Edit(**)", "Write(**)", "Bash"],
+			effectiveTools: ["Bash", "Edit", "Glob", "Grep", "Read", "Write"],
+			canWrite: true,
+		});
+		expect(result.canWrite).toBe(true);
+		expect(warningsFor(result)).toEqual([]);
+	});
+});
+
+describe("warningsFor surfaces a grant the derivation dropped", () => {
+	it("warns when a configured tool is not actually granted", () => {
+		// `Edit(src/**)` reads as "may edit these paths". The narrowing is not
+		// enforceable, so the derivation withholds `Edit` outright — a difference
+		// between the config and the session that nothing used to report.
+		const warnings = warningsFor(
+			makeResult({
+				allowed: ["Read", "Edit(src/**)", "Bash"],
+				effectiveTools: ["Bash", "Glob", "Grep", "Read"],
+				canWrite: false,
+				shell: "full",
+				dropped: [
+					{
+						entry: "Edit(src/**)",
+						reason:
+							"argument-narrowed grant on mutating tool cannot be enforced",
+					},
+				],
+			}),
+		);
+
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("Edit(src/**)");
+		expect(warnings[0]).toContain("configured but not granted");
 	});
 });
 

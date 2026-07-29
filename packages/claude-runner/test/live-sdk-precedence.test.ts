@@ -27,6 +27,28 @@ import { deriveBuiltInDisallowedTools } from "../src/built-in-tool-restrictions"
  *
  *     CYRUS_LIVE_SDK_TEST=1 pnpm vitest run test/live-sdk-precedence.test.ts
  *
+ * ## ⚠️ Not yet re-measured on 0.3.220
+ *
+ * Every claim below was measured on **0.3.205**. The stack now ships **0.3.220**,
+ * and the whole security argument of the tool-permission and Grok work rests on
+ * these numbers, so they need re-taking on the version that will actually run.
+ *
+ * Attempted 2026-07-29 and **could not be run**: the bundled SDK binary in that
+ * environment reported `Not logged in · Please run /login`, so no model call
+ * happened. That attempt is also what surfaced the `assertLiveSdkUsable`
+ * pre-flight below — before it, three of these tests passed *vacuously* on an
+ * unauthenticated run, because "the file was not modified" is trivially true
+ * when nothing executed. A credential-less run now fails loudly instead of
+ * looking like a green measurement.
+ *
+ * To close it, on a machine with Claude Code credentials:
+ *
+ *     CYRUS_LIVE_SDK_TEST=1 pnpm vitest run test/live-sdk-precedence.test.ts
+ *
+ * Then update the table, the version strings here, and the `0.3.205` citations
+ * in `cyrus-core`'s `MUTATING_BASH_DENY_RULES` and
+ * `claude-runner`'s `built-in-tool-restrictions.ts`.
+ *
  * ## What was measured (2026-07-26, @anthropic-ai/claude-agent-sdk@0.3.205)
  *
  * | run             | config                                    | `git status` | canUseTool fired |
@@ -57,12 +79,76 @@ import { deriveBuiltInDisallowedTools } from "../src/built-in-tool-restrictions"
  */
 const LIVE = process.env.CYRUS_LIVE_SDK_TEST === "1";
 
+/**
+ * Refuse to run if the SDK cannot actually reach a model.
+ *
+ * Without this, an unauthenticated environment produces a **green** run that
+ * measures nothing. Three of the tests below assert a deterministic negative —
+ * "the file was not modified" — precisely because a refusal message only appears
+ * if the model attempted the command. That reasoning holds when the session ran;
+ * it inverts when the session never started, because an SDK that made no call
+ * also wrote no file.
+ *
+ * This is not hypothetical. The 2026-07-29 attempt to re-measure on 0.3.220 hit
+ * exactly this: the binary answered `Not logged in · Please run /login`, the
+ * whole suite finished in 7.7 seconds, and it reported three passes. A guardrail
+ * suite that passes when it cannot test anything is worse than no suite, because
+ * the green tick is what gets trusted.
+ */
+async function assertLiveSdkUsable(): Promise<void> {
+	const probe = query({
+		prompt: "Reply with the single word: ready",
+		options: { model: "claude-haiku-4-5-20251001", maxTurns: 1, tools: [] },
+	});
+
+	let sawAssistantText = false;
+	let failure: string | undefined;
+	try {
+		for await (const msg of probe) {
+			if (msg.type === "assistant") {
+				for (const block of (msg as any).message?.content ?? []) {
+					if (block.type === "text" && block.text?.trim())
+						sawAssistantText = true;
+				}
+			}
+			if (msg.type === "result") {
+				const result = msg as any;
+				if (
+					result.terminal_reason &&
+					result.terminal_reason !== "stop_sequence"
+				) {
+					failure = `${result.terminal_reason}: ${result.result ?? ""}`;
+				}
+				if (
+					typeof result.result === "string" &&
+					/not logged in/i.test(result.result)
+				) {
+					failure = result.result;
+				}
+			}
+		}
+	} catch (error) {
+		failure = (error as Error).message;
+	}
+
+	if (!sawAssistantText || failure) {
+		throw new Error(
+			"CYRUS_LIVE_SDK_TEST=1 was set, but the SDK could not reach a model" +
+				`${failure ? ` (${failure})` : ""}. These tests measure real SDK ` +
+				"behaviour, and their deterministic assertions pass trivially when no " +
+				"session runs — so refusing to run is the only honest outcome. " +
+				"Authenticate Claude Code (`claude /login`, or set ANTHROPIC_API_KEY) " +
+				"and re-run.",
+		);
+	}
+}
+
 describe.runIf(LIVE)(
 	"disallowedTools vs. the SDK pre-approval layer (live)",
 	() => {
 		let repo: string;
 
-		beforeAll(() => {
+		beforeAll(async () => {
 			repo = mkdtempSync(join(tmpdir(), "cyrus-cyr25-"));
 			execFileSync("git", ["init", "-q", repo]);
 			execFileSync("git", ["-C", repo, "config", "user.email", "t@t.co"]);
@@ -70,7 +156,9 @@ describe.runIf(LIVE)(
 			writeFileSync(join(repo, "a.txt"), "hello\n");
 			execFileSync("git", ["-C", repo, "add", "-A"]);
 			execFileSync("git", ["-C", repo, "commit", "-qm", "init"]);
-		});
+
+			await assertLiveSdkUsable();
+		}, 120_000);
 
 		afterAll(() => {
 			rmSync(repo, { recursive: true, force: true });

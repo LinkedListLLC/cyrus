@@ -1,12 +1,33 @@
 #!/usr/bin/env bash
 # Entrypoint for the Dokploy/self-host container. See docs/DOKPLOY.md.
-set -e
+#
+# `-u` catches a typo'd variable instead of expanding it to empty and carrying
+# on — which in this script would mean silently mis-setting a path. `pipefail`
+# makes a failure on the left of a pipe fail the line. Every read of an optional
+# env var below already uses `${VAR:-}`, so `-u` is safe here.
+set -euo pipefail
 
 # Non-interactive GitHub auth for cloning private repos. Provide a fine-grained
 # PAT (contents R/W on the target repos) as GH_TOKEN in the Dokploy env panel.
 # We rewrite github.com HTTPS URLs to embed the token (stateless, per boot), and
 # export GITHUB_TOKEN so the gh CLI and Cyrus's GitHub-App fallback pick it up.
+#
+# The rewrite goes into a git config file OUTSIDE $HOME, via GIT_CONFIG_GLOBAL.
+# It used to be written to /root/.gitconfig — the same $HOME every agent session
+# runs under — which put the PAT in cleartext on disk where a session could read
+# it. `buildHomeDirectoryDisallowedTools` is supposed to deny that read, but the
+# whole evidence base of this stack is that tool-layer denials are the layer that
+# gets bypassed, and a secret that is not on disk needs no denial. 0600, and
+# under /run (tmpfs on a normal host) so it does not outlive the container.
+#
+# GITHUB_TOKEN is still exported, so it remains readable in the environment of
+# any child process. That is inherent to how `gh` and Cyrus's GitHub-App
+# fallback consume it, and it is recorded in docs/DOKPLOY.md.
 if [ -n "${GH_TOKEN:-}" ]; then
+  export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/run/cyrus-git/config}"
+  mkdir -p "$(dirname "$GIT_CONFIG_GLOBAL")"
+  touch "$GIT_CONFIG_GLOBAL"
+  chmod 600 "$GIT_CONFIG_GLOBAL"
   git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
   export GITHUB_TOKEN="${GH_TOKEN}"
 fi

@@ -98,6 +98,46 @@ and the `gh` CLI (exported as `GITHUB_TOKEN`), so one token covers both.
 covers clone/push/PR; add `workflow` if touching workflow files, `read:org` if
 you hit org-visibility issues.
 
+#### What the agent sessions can see
+
+Scope the token as if the agent can read it, because it can.
+
+- **`GITHUB_TOKEN` is exported into the environment** the agent sessions inherit,
+  because that is how `gh` and Cyrus's GitHub-App fallback consume it. A session
+  with `Bash` can therefore read the token. There is no way around this while
+  `gh` is the PR mechanism.
+- **The git URL rewrite is *not* written to `/root/.gitconfig`.** It goes to
+  `$GIT_CONFIG_GLOBAL` (default `/run/cyrus-git/config`, mode 0600) — outside
+  the `$HOME` every session runs under, and outside the persisted volume, so the
+  PAT is not left on disk in a place a session reads by default.
+- **Everything in the container runs as `root`, including agent sessions.** This
+  image is single-tenant by design — one operator, one workspace — and the
+  processes it runs are the agent sessions themselves, so a non-root user would
+  buy little while breaking the `/root/.cyrus` volume layout every path here
+  assumes. The consequence is worth stating plainly: the per-session tool
+  restrictions are Claude Code's permission layer, not an OS boundary. If you
+  want an OS boundary, enable the sandbox (see *Sandbox*, below) — that is what
+  enforces filesystem limits at the kernel level.
+
+Practical upshot: use a **fine-grained PAT scoped to the specific repos**, never
+a classic `repo`-scoped token on an account with access to anything you would
+mind an agent session reaching.
+
+#### Webhook authentication
+
+`WEBHOOK_IP_VALIDATION=false` is baked into the image, and correctly so: behind
+Traefik the source IP Cyrus sees is the proxy's edge, never Linear's, so the
+allowlist would reject every delivery. That makes the **HMAC signature the only
+authentication on the webhook endpoint**, which means the signing secret is
+mandatory rather than optional.
+
+Cyrus enforces that: with `LINEAR_DIRECT_WEBHOOKS=true` and no
+`LINEAR_WEBHOOK_SECRET`, it now **refuses to start**. Previously the secret fell
+back to an empty string, and an HMAC computed with an empty key is one any caller
+can also compute — so with the IP check off, every forged webhook would have been
+accepted. Set `LINEAR_WEBHOOK_SECRET` to the signing secret from Linear's webhook
+settings.
+
 ## Create the Dokploy Application
 
 1. **New Application** → Source: GitHub `LinkedListLLC/cyrus`, branch `main`.
