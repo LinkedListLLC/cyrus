@@ -242,6 +242,42 @@ describe("EdgeWorker - reviewOnStatus trigger (CYR-5)", () => {
 		expect(mockIssueTracker.createAgentSessionOnIssue).toHaveBeenCalledTimes(1);
 	});
 
+	it("leaves the de-dup key unspent when it declines for in-flight", async () => {
+		// The two guards used to run in the other order, so a genuinely new
+		// transition arriving mid-review consumed its own de-dup key on the way to
+		// being refused. Linear does not mint a new key for a transition that
+		// already happened, so that review could never happen — not when the
+		// running one finished, not on a redelivery. Declining for in-flight has
+		// to be deferrable.
+		const worker = createWorker("In Review", "In Review");
+		(worker as any).initializeReviewRunner = vi
+			.fn()
+			.mockResolvedValue(undefined);
+
+		const first = createStateChangeWebhook();
+		const second = createStateChangeWebhook({
+			createdAt: "2025-01-01T00:05:00Z",
+		});
+
+		await (worker as any).handleIssueStateChange(first);
+		// Declined: a review is in flight.
+		await (worker as any).handleIssueStateChange(second);
+		expect(mockIssueTracker.createAgentSessionOnIssue).toHaveBeenCalledTimes(1);
+
+		const issueId = first.data.id;
+		const tracker = (worker as any).reviewSessions;
+		expect(tracker.hasReviewInFlight(issueId)).toBe(true);
+
+		// The first review finishes, and Linear redelivers the same transition.
+		tracker.abandonReview(issueId);
+		expect(tracker.hasReviewInFlight(issueId)).toBe(false);
+
+		await (worker as any).handleIssueStateChange(second);
+
+		// The redelivery is acted on, because its key was never spent.
+		expect(mockIssueTracker.createAgentSessionOnIssue).toHaveBeenCalledTimes(2);
+	});
+
 	it("does not review when no repository can be resolved for the issue", async () => {
 		const worker = createWorker("In Review", "In Review");
 		(worker as any).resolveRepositoryForIssue = vi.fn().mockReturnValue(null);
@@ -535,7 +571,11 @@ describe("EdgeWorker - reviewOnStatus trigger (CYR-5)", () => {
 		expect(allowedTools).not.toContain("Edit");
 		expect(allowedTools).not.toContain("Write");
 		expect(allowedTools).not.toContain("Bash");
-		expect(allowedTools).toContain("mcp__linear");
+		// Enumerated Linear tools, never the `mcp__linear` prefix — the prefix
+		// included `merge_diff`, and no deny layer covers an `mcp__*` rule.
+		expect(allowedTools).toContain("mcp__linear__save_comment");
+		expect(allowedTools).not.toContain("mcp__linear");
+		expect(allowedTools).not.toContain("mcp__linear__merge_diff");
 		expect(disallowedTools).toContain("Edit");
 		expect(disallowedTools).toContain("Write");
 	});

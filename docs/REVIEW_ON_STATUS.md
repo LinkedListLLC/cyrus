@@ -35,6 +35,15 @@ The **name** of the Linear workflow state that triggers a review (matched case-i
 whitespace-trimmed). Unset or empty disables the feature for that repository — this is the
 default, so existing configs are unaffected.
 
+> **Renaming the state turns the feature off.** The match is on the state's *name*, which is
+> free text that anyone in the workspace can edit, not on its id or its type. If someone renames
+> "In Review" to "Needs Review", every subsequent transition stops triggering and nothing in Linear
+> says so. It is diagnosable rather than silent — each declined trigger logs at INFO with both
+> names, e.g. `No review for ABC-12: moved to "Needs Review", but 'repo' triggers on "In Review"` —
+> but the config has to be updated by hand. Matching on the name is deliberate: state *ids* differ
+> per team and would make a shared config unportable, and state *types* are too coarse (several
+> states share `started`).
+
 `reviewOnStatus` is a per-repository field, so it hot-reloads with the rest of the repository
 entry: `ConfigManager` diffs repository objects wholesale and `EdgeWorker.updateModifiedRepositories`
 spreads the new object into the live map. No `ConfigManager` change is needed (unlike the global
@@ -288,6 +297,15 @@ Stated explicitly because the design has one load-bearing external behavior.
   normal delegation. The window is the few milliseconds between the mint returning and the runner
   starting, and the per-issue guard is dropped with the rest of the state, so a subsequent
   transition can always start a fresh review.
-- Review worktrees are removed when the review completes or the issue reaches a terminal state, but
-  a process restart in between leaves them on disk until the next terminal transition for that
-  issue.
+- Review worktrees are removed when the review completes or the issue reaches a terminal state. A
+  process restart in between used to strand the directory *and* its git registration permanently,
+  since the map holding them is in-memory and only a terminal transition removed them. `EdgeWorker`
+  now sweeps `worktrees/reviews/` at startup (`GitService.pruneReviewWorktrees`) and prunes the
+  stale git entries: at that moment no in-process review can own a directory there, so everything
+  present belongs to a dead process. The leak is bounded by one process lifetime rather than
+  unbounded.
+- `git fetch origin` in `createReviewWorktree` is synchronous (`execSync`), so it blocks the event
+  loop for the duration of the fetch — stalling other sessions and webhook handling. It matches the
+  existing `createSingleRepoWorktree` pattern, and the relevance gate means it only runs for a
+  review that is definitely going to happen, but on a large repository it is the most expensive
+  blocking call on this path.
