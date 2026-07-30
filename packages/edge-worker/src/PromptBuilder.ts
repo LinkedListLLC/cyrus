@@ -39,7 +39,8 @@ export interface SystemPromptResult {
 		| "orchestrator"
 		| "graphite-orchestrator"
 		| "wayfinder"
-		| "wayfinder-task";
+		| "wayfinder-task"
+		| "refactorer";
 }
 
 /**
@@ -256,6 +257,10 @@ export class PromptBuilder {
 		//   sit *after* `debugger` and `builder`, which contradicted the rule this
 		//   comment states: a ticket labelled both `Bug` and a scoper label
 		//   started building instead of scoping.
+		// - `refactorer` — behaviour must not change. A ticket labelled both
+		//   `Bug` and `Refactor` is "this is a mess, tidy it"; if `debugger` won,
+		//   the session would arrive intending to change the very behaviour the
+		//   refactorer exists to preserve.
 		//
 		// Then the personas that describe subject matter, which do build.
 		// `orchestrator` stays last: it is the coordinating fallback, and it also
@@ -265,6 +270,7 @@ export class PromptBuilder {
 			"wayfinder",
 			"wayfinder-task",
 			"scoper",
+			"refactorer",
 			"debugger",
 			"builder",
 			"orchestrator",

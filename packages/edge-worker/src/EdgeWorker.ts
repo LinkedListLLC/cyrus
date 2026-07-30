@@ -5367,6 +5367,7 @@ ${taskSection}`;
 				| "graphite-orchestrator"
 				| "wayfinder"
 				| "wayfinder-task"
+				| "refactorer"
 				| undefined;
 
 			if (!isMentionTriggered || isLabelBasedPromptRequested) {
@@ -6319,7 +6320,8 @@ ${taskSection}`;
 					| "orchestrator"
 					| "graphite-orchestrator"
 					| "wayfinder"
-					| "wayfinder-task";
+					| "wayfinder-task"
+					| "refactorer";
 		  }
 		| undefined
 	> {
@@ -7513,7 +7515,8 @@ ${input.userComment}
 			| "orchestrator"
 			| "graphite-orchestrator"
 			| "wayfinder"
-			| "wayfinder-task",
+			| "wayfinder-task"
+			| "refactorer",
 	): string[] {
 		return this.toolPermissionResolver.buildDisallowedTools(
 			repositories,
@@ -7534,7 +7537,8 @@ ${input.userComment}
 			| "orchestrator"
 			| "graphite-orchestrator"
 			| "wayfinder"
-			| "wayfinder-task",
+			| "wayfinder-task"
+			| "refactorer",
 	): string[] {
 		return this.toolPermissionResolver.buildAllowedTools(
 			repositories,

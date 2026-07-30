@@ -126,6 +126,8 @@ const LabelPromptsSchema = z.object({
 	wayfinder: LabelPromptConfigSchema.optional(),
 	/** Write-capable Wayfinder personas: task, prototype. */
 	"wayfinder-task": LabelPromptConfigSchema.optional(),
+	/** Post-review, behaviour-preserving complexity reduction. */
+	refactorer: LabelPromptConfigSchema.optional(),
 	graphite: GraphiteLabelConfigSchema.optional(),
 });
 
@@ -277,6 +279,7 @@ const PromptDefaultsSchema = z.object({
 	"graphite-orchestrator": PromptTypeDefaultsSchema.optional(),
 	wayfinder: PromptTypeDefaultsSchema.optional(),
 	"wayfinder-task": PromptTypeDefaultsSchema.optional(),
+	refactorer: PromptTypeDefaultsSchema.optional(),
 });
 
 /**

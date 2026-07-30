@@ -446,6 +446,27 @@ Twenty-two features. The 54 commits map onto them with no remainder.
   opened (PR #30). Depends on F17, which introduces both prompts. It bumps them
   to `v1.1.0`, so it cannot precede F17.
 
+### F23 — `refactorer` persona + complexity skill
+
+* **Purpose:** give the read-only `review` persona a write-capable counterpart
+  that acts on its complexity findings, and ship the
+  `github/awesome-copilot` `refactor-method-complexity-reduce` skill to every
+  session.
+* **Files:** `prompts/refactorer.md` (+), `PromptBuilder.ts`,
+  `ToolPermissionResolver.ts`, `EdgeWorker.ts`, `config-schemas.ts`,
+  `packages/core/schemas/*.json` (regenerated),
+  `.agents/skills/refactor-method-complexity-reduce/**`,
+  `.claude/skills/refactor-method-complexity-reduce`,
+  `packages/edge-worker/cyrus-skills-plugin/skills/refactor-method-complexity-reduce`,
+  `skills-lock.json`, `docs/PERSONAS.md`
+* **Tests:** `PromptBuilder.persona-routing.test.ts` (+2 describes, 8 cases),
+  three `prompt-assembly` skill counts
+* **Recommendation: keep.** Depends on F17 (which introduces the prompt
+  ladder) and on F21, whose deployer backfill is what delivers the new skill to
+  an already-installed Cyrus.
+* **Note:** the persona is label-routed (`Refactor`), not chained off the end of
+  a review. Nothing triggers it automatically when a review finishes.
+
 F4 folds into F3 in the commit plan, F13 splits across two commits, and F16 is
 dropped.
 
