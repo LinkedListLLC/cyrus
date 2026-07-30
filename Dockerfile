@@ -24,6 +24,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
+# GitHub's stacked-PR extension, so sessions can run `gh stack` (CYR-60).
+#
+# No build-time credential is needed: `github/gh-stack` is a public repo, and
+# `gh extension install` reads its releases anonymously — verified on gh 2.96
+# with GH_TOKEN, GITHUB_TOKEN and the gh config directory all absent. The
+# install lands in /root/.local/share/gh/extensions, which is an image layer
+# and outside the persisted /root/.cyrus volume, so a redeploy cannot lose it.
+#
+# Version-pinned, like every other input to this build. `--pin` does two things:
+# it selects the release instead of taking whatever is latest on the day of the
+# build, and it records `ispinned: true` in the extension manifest, so a session
+# running `gh extension upgrade` leaves this version alone.
+#
+# The assertion below is not just a re-read of the pin. This is a *precompiled*
+# extension: gh downloads the release asset for the build platform's
+# architecture, and a wrong or corrupt asset installs cleanly and only fails the
+# first time a session calls it. Executing the binary at build time is what
+# turns that into a failed build.
+ARG GH_STACK_VERSION=v0.1.0
+RUN gh extension install github/gh-stack --pin "$GH_STACK_VERSION" \
+ && GH_STACK_ACTUAL="$(gh stack --version | tr -d '\r')" \
+ && echo "gh-stack: $GH_STACK_ACTUAL (expected $GH_STACK_VERSION)" \
+ && if ! echo "$GH_STACK_ACTUAL" | grep -qF "${GH_STACK_VERSION#v}"; then \
+      echo "ERROR: gh-stack reports a different version than the pinned ${GH_STACK_VERSION}." >&2; \
+      exit 1; \
+    fi
+
 # The Claude Code CLI that Cyrus drives (provides the `claude` binary on PATH).
 #
 # Version-pinned, and pinned to the Claude Code that `claude-agent-sdk@0.3.220`

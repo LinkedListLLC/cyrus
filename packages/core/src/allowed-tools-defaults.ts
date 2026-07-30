@@ -456,12 +456,13 @@ export const REVIEW_DISALLOWED_TOOLS = [
  *
  * ## Deliberate over-blocking
  *
- * Four entries also refuse read-only invocations, because the deny vocabulary
+ * Five entries also refuse read-only invocations, because the deny vocabulary
  * matches a command prefix and cannot see an argument's intent:
  * `Bash(git branch:*)` (bare `git branch` lists), `Bash(git config:*)`
- * (`--get` reads), `Bash(git remote:*)` (bare `git remote` lists), and
- * `Bash(gh api:*)` (a GET reads). `gh api` is the costly one — it removes a
- * lot of legitimate read-only work from a reviewer. The trade is accepted:
+ * (`--get` reads), `Bash(git remote:*)` (bare `git remote` lists),
+ * `Bash(gh api:*)` (a GET reads), and `Bash(gh stack:*)` (`gh stack view`
+ * reads). `gh api` is the costly one — it removes a lot of legitimate
+ * read-only work from a reviewer. The trade is accepted:
  * each of those commands has a mutating form that is one flag away from the
  * reading form, and a restricted persona that needs one back can be granted it
  * explicitly — rule 3 of `deriveBuiltInDisallowedTools` never denies what the
@@ -501,6 +502,11 @@ export const MUTATING_BASH_DENY_RULES = [
 	"Bash(gh api:*)",
 	"Bash(gh repo:*)",
 	"Bash(gh secret:*)",
+	// The stacked-PR extension the image installs. Its name does not say so,
+	// but `gh stack submit`, `merge` and `push` reach the forge exactly as the
+	// `gh pr` entries above do, so leaving it out would hand back the route
+	// those entries close.
+	"Bash(gh stack:*)",
 	"Bash(glab:*)",
 
 	// In-place file mutation — the way around a denied Edit/Write
