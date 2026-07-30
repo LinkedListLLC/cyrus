@@ -19,7 +19,8 @@ export type PromptType =
 	| "orchestrator"
 	| "graphite-orchestrator"
 	| "wayfinder"
-	| "wayfinder-task";
+	| "wayfinder-task"
+	| "refactorer";
 
 /**
  * Unified tool permission resolver for issue, chat, and webhook-triggered

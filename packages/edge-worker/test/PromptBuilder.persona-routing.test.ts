@@ -225,6 +225,98 @@ describe("the Wayfinder prompts — the delegation boundary", () => {
 	}
 });
 
+describe("PromptBuilder — refactorer persona routing", () => {
+	/** The Wayfinder config plus the refactorer label it is deployed with. */
+	const REFACTORER_LABEL_PROMPTS: RepositoryConfig["labelPrompts"] = {
+		...WAYFINDER_LABEL_PROMPTS,
+		refactorer: { labels: ["Refactor"], allowedTools: "all" },
+	};
+
+	it("routes the Refactor label to prompts/refactorer.md", async () => {
+		const builder = makeBuilder();
+		const repository = makeRepository(REFACTORER_LABEL_PROMPTS);
+		const onDisk = await readFile(join(PROMPTS_DIR, "refactorer.md"), "utf-8");
+
+		const result = await builder.determineSystemPromptFromLabels(
+			["Refactor"],
+			[repository],
+		);
+
+		expect(result?.type).toBe("refactorer");
+		expect(result?.prompt).toBe(onDisk);
+		expect(result?.version).toBe("refactorer-v1.0.0");
+	});
+
+	it("matches the refactorer label case-insensitively", async () => {
+		const builder = makeBuilder();
+		const repository = makeRepository(REFACTORER_LABEL_PROMPTS);
+
+		const result = await builder.determineSystemPromptFromLabels(
+			["refactor"],
+			[repository],
+		);
+
+		expect(result?.type).toBe("refactorer");
+	});
+
+	// The refactorer promises behaviour will not change. That constraint has to
+	// beat a label that merely says what the code is about — otherwise an issue
+	// labelled both `Bug` and `Refactor` arrives as a debugger, intending to
+	// change the very behaviour the refactorer exists to preserve.
+	for (const other of ["Bug", "Feature"]) {
+		it(`prefers refactorer over the ${other} label on the same issue`, async () => {
+			const builder = makeBuilder();
+			const repository = makeRepository(REFACTORER_LABEL_PROMPTS);
+
+			const result = await builder.determineSystemPromptFromLabels(
+				[other, "Refactor"],
+				[repository],
+			);
+
+			expect(result?.type).toBe("refactorer");
+		});
+	}
+
+	it("leaves the other personas routing untouched", async () => {
+		const builder = makeBuilder();
+		const repository = makeRepository(REFACTORER_LABEL_PROMPTS);
+
+		await expect(
+			builder
+				.determineSystemPromptFromLabels(["Bug"], [repository])
+				.then((r) => r?.type),
+		).resolves.toBe("debugger");
+		await expect(
+			builder
+				.determineSystemPromptFromLabels(["Feature"], [repository])
+				.then((r) => r?.type),
+		).resolves.toBe("builder");
+	});
+});
+
+describe("prompts/refactorer.md — the skill contract", () => {
+	// The skill ships Copilot-style `${input:…}` placeholders, which nothing
+	// substitutes at runtime. A session that invokes the skill bare therefore
+	// gets a prompt with no target method and no threshold. The persona is only
+	// useful if it states both explicitly, so pin that instruction here.
+	it("tells the session to pass the skill its parameters explicitly", async () => {
+		const content = await readFile(join(PROMPTS_DIR, "refactorer.md"), "utf-8");
+
+		expect(content).toContain("/refactor-method-complexity-reduce");
+		expect(content).toContain("${input:methodName}");
+		expect(content).toContain("${input:complexityThreshold}");
+		expect(content).toContain("**Its parameters are not filled in for you.**");
+	});
+
+	it("requires a completed review before any edit, and forbids behaviour change", async () => {
+		const content = await readFile(join(PROMPTS_DIR, "refactorer.md"), "utf-8");
+
+		expect(content).toContain("**Behaviour must not change.**");
+		expect(content).toContain("**Read the review before you touch anything.**");
+		expect(content).toContain("**Refactor only what the review flagged.**");
+	});
+});
+
 describe("prompts/*.md — every persona prompt declares a version", () => {
 	it("parses a <version-tag> out of every prompt file", async () => {
 		const files = (await readdir(PROMPTS_DIR))

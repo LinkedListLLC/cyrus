@@ -1,9 +1,8 @@
 # Personas (label-routed system prompts)
 
 Cyrus selects a **persona** — a system prompt plus a tool policy — from the labels on the Linear
-issue it has been assigned. Seven personas exist. Five are markdown files loaded from disk, two
-more are markdown files added by CYR-37, and one (`review`) is built in TypeScript and is
-deliberately not label-routed at all.
+issue it has been assigned. Nine personas exist. Eight are markdown files loaded from disk, and one
+(`review`) is built in TypeScript and is deliberately not label-routed at all.
 
 This document is the reference for what each persona is for, how one is chosen, and what
 configuration it needs. For the review persona specifically, see
@@ -21,6 +20,7 @@ match.
 | `graphite-orchestrator` | `prompts/graphite-orchestrator.md` | yes | The same, on Graphite stacked PRs |
 | `wayfinder` | `prompts/wayfinder.md` | **read-only** | A Wayfinder map / research / grilling ticket |
 | `wayfinder-task` | `prompts/wayfinder-task.md` | yes | A Wayfinder task / prototype ticket |
+| `refactorer` | `prompts/refactorer.md` | yes | Reducing complexity a review already flagged |
 | `review` | `src/prompts/reviewOnStatusPrompt.ts` | **read-only** | Reviewing a PR when an issue reaches In Review |
 
 `scoper` is read-only by *configuration*, not by construction — it is read-only wherever its
@@ -164,7 +164,10 @@ See the comment on `MUTATING_BASH_DENY_RULES` for the measurement behind that.
    warning and is ignored.
 3. Within one repository, `matchSystemPromptForRepo` checks, in this order:
    1. `graphite-orchestrator` — requires **both** a graphite label and an orchestrator label.
-   2. `wayfinder`, `wayfinder-task`, `debugger`, `builder`, `scoper`, `orchestrator`.
+   2. `wayfinder`, `wayfinder-task`, `scoper`, `refactorer`, `debugger`, `builder`, `orchestrator`.
+      The constraining personas come first, then the ones that describe subject matter. (This list
+      previously read `wayfinder, wayfinder-task, debugger, builder, scoper, orchestrator`, which
+      had not matched the code since `scoper` was moved ahead of `debugger`.)
 4. The matched prompt is read from `packages/edge-worker/prompts/<type>.md`, resolved relative to
    the compiled module (`join(__dirname, "..", "prompts", …)`).
 5. `ToolPermissionResolver` resolves the tool policy for that persona through its five-rung ladder:
@@ -236,6 +239,50 @@ Both prompts carry the same protocol:
 
 These rules previously lived in a ~1,200-character `appendInstruction` string duplicated into every
 repository's config entry. They now live in the personas, and that string can be deleted.
+
+## The refactorer persona
+
+`refactorer` is the persona that runs **after** a code review, to act on the complexity findings the
+review produced. It is the write-capable other half of `review`: the reviewer can name a method that
+is too complex but cannot touch it, and the builder that wrote the method has already moved on.
+
+It is label-routed like every other persona — it is **not** chained automatically off the end of a
+review. A review posts its findings to the issue; a human (or an orchestrator) then applies the
+`Refactor` label, and the next session arrives as the refactorer. Nothing in `EdgeWorker` triggers
+it on review completion, and this document does not claim it does.
+
+```json
+"refactorer": { "labels": ["Refactor"], "allowedTools": "all" }
+```
+
+**`all`, not `safe`.** The persona must run the tests to prove behaviour did not change, so it needs
+`Bash` — see the `safe` warning above.
+
+Three properties are load-bearing:
+
+- **It reads the review before it edits.** The prompt requires a completed review and tells the
+  session to stop and say so when it cannot find one. A refactorer that invents its own targets is
+  just an unreviewed rewrite.
+- **Behaviour must not change.** Same outputs, same exception types, same error messages. The tests
+  are the evidence, so the prompt requires a green run before the refactor as well as after, and a
+  characterisation test first where coverage is missing.
+- **Only what the review flagged.** Findings that need a design decision rather than an extraction
+  are reported, not acted on.
+
+### The skill's parameters are not filled in for you
+
+The persona's primary skill is
+[`refactor-method-complexity-reduce`](https://github.com/github/awesome-copilot), vendored into
+`.agents/skills/` and bundled into the runtime plugin, so it is available in **every** session on
+every repository — not only in this one.
+
+The skill comes from a Copilot prompt library, and its text carries the literal placeholders
+`${input:methodName}` and `${input:complexityThreshold}`. **Nothing substitutes them.** Claude Code
+has no equivalent of Copilot's `${input:…}` prompting, so a session that invokes the skill bare gets
+instructions with no target method and no threshold. The persona prompt therefore tells the session
+to state both values in the invocation, and
+`PromptBuilder.persona-routing.test.ts` fails if that instruction is removed. The default threshold
+is a cognitive complexity of **15** where the issue or the review does not name one.
 
 ## Checking a config: `cyrus personas`
 

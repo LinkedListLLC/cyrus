@@ -84,7 +84,7 @@ Remember: Your first message is internal planning. Use this time to:
 
 ## Skills
 
-You have skills available via the Skill tool: \`debug\`, \`i-have-adhd\`, \`implementation\`, \`investigate\`, \`summarize\`, \`verify-and-ship\`
+You have skills available via the Skill tool: \`debug\`, \`i-have-adhd\`, \`implementation\`, \`investigate\`, \`refactor-method-complexity-reduce\`, \`summarize\`, \`verify-and-ship\`
 
 Choose the appropriate skill based on the context:
 
@@ -179,7 +179,7 @@ Remember: Your first message is internal planning. Use this time to:
 
 ## Skills
 
-You have skills available via the Skill tool: \`debug\`, \`i-have-adhd\`, \`implementation\`, \`investigate\`, \`summarize\`, \`verify-and-ship\`
+You have skills available via the Skill tool: \`debug\`, \`i-have-adhd\`, \`implementation\`, \`investigate\`, \`refactor-method-complexity-reduce\`, \`summarize\`, \`verify-and-ship\`
 
 Choose the appropriate skill based on the context:
 
