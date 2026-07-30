@@ -37,6 +37,7 @@ Used by `/wayfinder`. The **map** is a parent issue with **child** issues as tic
 - **Blocking**: `save_issue`'s `blockedBy` field (Linear's native relation). A ticket is unblocked when every issue in `blockedBy` is in a Done/Canceled state.
 - **Frontier query**: `list_issues` with `parentId` set to the map, `state: "Todo"`, then drop any with an open blocker or a non-null assignee; first in Linear's default order wins.
 - **Claim**: `save_issue` with `id`, `assignee: "me"` (or the driving agent), and `state: "In Progress"` — the session's first write.
+- **Delegate**: `mcp__cyrus-tools__linear_agent_session_create` with `issueId` — starts a second Cyrus session on a child ticket. That session is a full wayfinding session: it claims the ticket, resolves it, closes it, and appends its own line to the map. **The delegating session must not also work that ticket** — two sessions on one ticket do the work twice and write the answer twice. Nor does it wait: when the delegated session finishes, its final message returns to the delegating session as a new prompt. So delegate, continue with your own tickets, then end the turn and name the reports you wait for.
 - **Resolve**: `save_comment` with the answer, then `save_issue` with `state` set to **Done**, then append a context pointer (gist + link) to the map's Decisions-so-far.
 - **Out of scope**: `save_issue` with `state` set to **Canceled** + one line in the map's Out of scope section.
 

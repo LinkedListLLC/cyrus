@@ -85,7 +85,7 @@ describe("PromptBuilder — Wayfinder persona routing", () => {
 
 			expect(result?.type, `label ${label}`).toBe("wayfinder");
 			expect(result?.prompt).toBe(onDisk);
-			expect(result?.version).toBe("wayfinder-v1.0.0");
+			expect(result?.version).toBe("wayfinder-v1.1.0");
 		}
 	});
 
@@ -105,7 +105,7 @@ describe("PromptBuilder — Wayfinder persona routing", () => {
 
 			expect(result?.type, `label ${label}`).toBe("wayfinder-task");
 			expect(result?.prompt).toBe(onDisk);
-			expect(result?.version).toBe("wayfinder-task-v1.0.0");
+			expect(result?.version).toBe("wayfinder-task-v1.1.0");
 		}
 	});
 
@@ -203,6 +203,26 @@ describe("PromptBuilder — Wayfinder persona routing", () => {
 
 		expect(result?.type).toBe("wayfinder");
 	});
+});
+
+describe("the Wayfinder prompts — the delegation boundary", () => {
+	// CYR-58: a map session delegated a child ticket to a second Cyrus session
+	// and then resolved that same ticket itself, so the work happened twice.
+	// Both Wayfinder prompts must say that delegation hands the ticket over,
+	// that the report comes back on its own, and that the session keeps working
+	// its own tickets meanwhile.
+	for (const file of ["wayfinder.md", "wayfinder-task.md"]) {
+		it(`tells ${file} sessions that a delegated ticket is no longer theirs`, async () => {
+			const content = await readFile(join(PROMPTS_DIR, file), "utf-8");
+
+			expect(content).toContain("## Delegating a ticket");
+			expect(content).toContain("It does not share the ticket with you.");
+			expect(content).toContain("**Never work a ticket you delegated.**");
+			expect(content).toContain("**Delegating is not resolving.**");
+			expect(content).toContain("**Do not wait idly for the report.**");
+			expect(content).toContain("### Delegated");
+		});
+	}
 });
 
 describe("prompts/*.md — every persona prompt declares a version", () => {
