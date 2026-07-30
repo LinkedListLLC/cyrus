@@ -12,12 +12,13 @@ section 8. The rebuild follows the commit plan in section 7.
 | Upstream | `ceedaragents/cyrus` (`upstream/main`) |
 | Fork | `LinkedListLLC/cyrus` (`origin/main`) |
 | Fork point (merge base) | `516d8a03` — "Patch Cyrus CLI security advisories (#1383)", 2026-07-23 |
-| Our commits after it | 50, all linear. No merge commits. |
+| Our commits after it | 54, all linear. No merge commits. |
 | Upstream commits after it | 3 |
 | Net change | 134 files, +17283 / −584 |
 
 The count was 45 when this document was first written. PRs #22 and #23 added
-five more — see F20 and the notes on F1 and F3.
+five more — see F20 and the notes on F1 and F3. PRs #29 and #30 landed on `main`
+after the four rebuild PRs were opened, and added four more — see F21 and F22.
 
 Command that finds it again:
 
@@ -31,23 +32,31 @@ Measured twice. The first column is the fork tip as this document was first
 written. The second is the same 50 commits replayed onto upstream v0.2.67 — the
 rebase audit of section 3.1, and the real acceptance gate.
 
-| Check | `166368dc` | rebased onto `d1a98b80` |
-| -- | -- | -- |
-| `pnpm install` | pass | pass, lockfile unchanged |
-| `pnpm build` | pass | pass |
-| `pnpm typecheck` | pass | pass |
-| `pnpm test:packages:run` | pass | pass |
-| edge-worker | 898 tests, 76 files | 909 tests, 77 files |
-| core | 150 | 150 |
-| claude-runner | 166, 5 skipped (live SDK, opt-in) | 166, 5 skipped |
-| grok-runner | 103 | 103 |
-| gemini-runner | — | 198, 1 skipped |
-| github-event-transport | — | 117 |
-| codex-runner | — | 69 |
+| Check | `166368dc` | rebased onto `d1a98b80` | PR 5 tip |
+| -- | -- | -- | -- |
+| `pnpm install` | pass | pass, lockfile unchanged | pass |
+| `pnpm build` | pass | pass | pass |
+| `pnpm typecheck` | pass | pass | pass |
+| `pnpm test:packages:run` | pass | pass | pass |
+| edge-worker | 898 tests, 76 files | 909 tests, 77 files | 914, 77 files |
+| core | 150 | 150 | 167 |
+| claude-runner | 166, 5 skipped (live SDK, opt-in) | 166, 5 skipped | 167, 6 skipped |
+| grok-runner | 103 | 103 | 114 |
+| gemini-runner | — | 198, 1 skipped | 198, 1 skipped |
+| github-event-transport | — | 117 | 117 |
+| codex-runner | — | 69 | 69 |
 
 The clean branch must hold the second column. Use it as the acceptance gate.
 The 11 extra edge-worker tests are F20 (CYR-53), which landed after the first
 measurement.
+
+The third column is the tip of the five-branch stack, measured on 2026-07-30. It
+holds the gate and adds to it: the rebuild wrote new tests of its own for the
+corrected designs (R1), and F21 and F22 add five more to edge-worker.
+
+**Run `pnpm install` before you measure.** A worktree carried a `node_modules`
+from another branch, and `codexVersion.test.ts` failed on the stale
+`@openai/codex` — a stale install, not a regression.
 
 ## 3. Upstream movement since the fork point
 
@@ -109,7 +118,7 @@ our SDK `0.3.220`, and upstream's Codex runtime `0.144.4`, all at once.
 
 ## 4. Feature inventory
 
-Twenty features. The 50 commits map onto them with no remainder.
+Twenty-two features. The 54 commits map onto them with no remainder.
 
 ### F1 — Self-host Docker image and Dokploy runbook
 
@@ -409,6 +418,34 @@ Twenty features. The 50 commits map onto them with no remainder.
   resume ID the Claude CLI could no longer find. The container half of the same
   investigation is in F1 (`e8e7f462`).
 
+### F21 — `i-have-adhd` skill in every session (CYR-56)
+
+* **Purpose:** ship the `ayghri/i-have-adhd` skill to every Cyrus session, on
+  every repository, and fix the deployer that would never have delivered it.
+* **Commits:** `1d99a011`, `0dad93b1` (2)
+* **Files:** `.agents/skills/i-have-adhd/**`, `.claude/skills/i-have-adhd`,
+  `packages/edge-worker/cyrus-skills-plugin/skills/i-have-adhd`,
+  `DefaultSkillsDeployer.ts`, `skills-lock.json`
+* **Tests:** `DefaultSkillsDeployer.test.ts` (+), three `prompt-assembly` skill counts
+* **Recommendation: keep.** One commit. Landed after the four rebuild PRs were
+  opened (PR #29).
+* **Carries a real fix:** the deployer returned early once
+  `~/.cyrus/cyrus-skills-plugin/` existed, so an installed Cyrus never received a
+  skill added later. It now records what it has deployed and backfills only what
+  it has never sent, which keeps a deliberate deletion deleted.
+
+### F22 — Wayfinder delegation boundary (CYR-58)
+
+* **Purpose:** stop a `wayfinder:map` session doing the work of a ticket it
+  delegated to a second session.
+* **Commits:** `7512d034`, `e8e3bd28` (2)
+* **Files:** `prompts/wayfinder.md`, `prompts/wayfinder-task.md`,
+  `docs/PERSONAS.md`, `docs/agents/issue-tracker.md`
+* **Tests:** `PromptBuilder.persona-routing.test.ts` (+1 describe, 2 cases)
+* **Recommendation: keep.** One commit. Landed after the four rebuild PRs were
+  opened (PR #30). Depends on F17, which introduces both prompts. It bumps them
+  to `v1.1.0`, so it cannot precede F17.
+
 F4 folds into F3 in the commit plan, F13 splits across two commits, and F16 is
 dropped.
 
@@ -463,9 +500,12 @@ CYR-46 listed it as out of scope. Record it in `docs/REVIEW_ON_STATUS.md`.
 
 ## 7. Commit plan
 
-Nineteen commits, branched from `upstream/main` (`d1a98b80`, v0.2.67) — the
-rebase of section 3.1. They go on four stacked branches, one per PR (Q3). Each
+Twenty-one commits, branched from `upstream/main` (`d1a98b80`, v0.2.67) — the
+rebase of section 3.1. They go on five stacked branches, one per PR (Q3). Each
 PR targets the branch below it, so each review shows only its own commits.
+
+PR 5 was added after PRs 1–4 were opened, because `main` kept moving. It holds
+the work that landed on `main` in the meantime — see Q5.
 
 ### PR 1 — Tool permissions and enforcement
 
@@ -511,6 +551,20 @@ commit. Commit 12 keeps the `hasReviewInFlight` guard inside the status trigger.
 | 18 | `chore(deps): claude-agent-sdk 0.3.220 and the opus alias` (F19) | — |
 | 19 | `docs(changelog): one Unreleased section for the fork` (D1–D4) | all |
 
+### PR 5 — Skills and Wayfinder prompts (on PR 4)
+
+Everything `main` gained after PRs 1–4 were opened.
+
+| # | Commit | Depends on |
+| -- | -- | -- |
+| 20 | `feat(skills): add the i-have-adhd skill to every Cyrus session` (F21) | — |
+| 21 | `fix(prompts): stop a Wayfinder session doing work it delegated` (F22) | 14 |
+
+Both replay onto the stack with no code conflict — only `CHANGELOG.md`, which
+commit 19 has already rewritten. Their two `main` changelog commits (`0dad93b1`,
+`e8e3bd28`) are not replayed; their entries are rewritten into the one
+`[Unreleased]` section instead, as D1–D4 require.
+
 ### Gates
 
 Per commit: `pnpm build` and `pnpm typecheck`. Per PR tip: add
@@ -540,18 +594,34 @@ Do not send anything upstream until our own fixes are tight. Keep
 same place, but file neither. Revisit after the four PRs merge.
 
 **Q3 — Four PRs.** Split as in section 7. Stacked, each on the one below.
+Superseded in count only by Q5: there are five, and the fifth uses the same rule.
 
 **Q4 — Rebase onto `upstream/main` (v0.2.67): YES.**
 Section 3.1 measured it: 50 of 50 commits replay, zero code conflicts, one
 throwaway `CHANGELOG.md` conflict, and the result builds, typechecks and passes
 every package suite. No fallback path is needed.
 
+**Q5 — Work that lands on `main` while the stack is open: rebuild it as another
+PR on top of the stack.** Asked by William on 2026-07-30, while PRs 1–4 were open.
+Do not amend an open PR to hold it — that forces a second review of work already
+reviewed. Add a branch above the stack tip instead, and keep the same rules: one
+commit per feature, the final design only, and one `[Unreleased]` section. F21
+and F22 are the first two features handled this way (PR 5).
+
+The stack tracks `main` until `main` moves to the stack tip (M1). Re-run the
+audit before each merge:
+
+```bash
+git rev-list --oneline origin/main ^516d8a03 | wc -l   # compare with section 1
+git diff <stack-tip> origin/main --stat                # additive lines are unbuilt work
+```
+
 ## 9. Still open
 
-**M1 — How `main` takes the clean history.** The four PRs rebuild content that
+**M1 — How `main` takes the clean history.** The five PRs rebuild content that
 `origin/main` already carries, so they cannot target `main` — the diff would be
-empty. They stack on a snapshot of `upstream/main` instead. Once all four merge,
-`main` has to be moved to the stack tip, which rewrites 50 commits of published
+empty. They stack on a snapshot of `upstream/main` instead. Once all five merge,
+`main` has to be moved to the stack tip, which rewrites 54 commits of published
 history and needs William's explicit go-ahead. Alternatives: keep the old history
 on an archive branch (`main-pre-rebuild`) before moving, or merge the stack into
 `main` as one merge commit and accept the duplicate history.
