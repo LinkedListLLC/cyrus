@@ -3,8 +3,8 @@
 This fork adds a `Dockerfile`, `docker-entrypoint.sh`, and `.dockerignore` so
 Cyrus can run as a single **Dokploy Application** (Dockerfile build type). It
 builds Cyrus **from source** (this is a fork you can customize), installs the
-runtime deps (`git`, `jq`, `gh`, the Claude Code CLI), and runs the CLI server
-on port **3456**.
+runtime deps (`git`, `jq`, `gh` with the `gh-stack` extension, the Claude Code
+CLI), and runs the CLI server on port **3456**.
 
 > Upstream Cyrus ships no container support and expects a Node process under
 > pm2/systemd with state in `~/.cyrus/`. These files package that for Dokploy.
