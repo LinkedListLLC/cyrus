@@ -303,7 +303,9 @@ describe("prompts/refactorer.md — the skill contract", () => {
 		const content = await readFile(join(PROMPTS_DIR, "refactorer.md"), "utf-8");
 
 		expect(content).toContain("/refactor-method-complexity-reduce");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: the un-substituted placeholder is the subject of this test and must stay literal.
 		expect(content).toContain("${input:methodName}");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: the un-substituted placeholder is the subject of this test and must stay literal.
 		expect(content).toContain("${input:complexityThreshold}");
 		expect(content).toContain("**Its parameters are not filled in for you.**");
 	});
