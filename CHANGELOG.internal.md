@@ -18,6 +18,7 @@ This section covers the LinkedList fork only.
 ### Changed
 - User-facing output follows ASD-STE100 Simplified Technical English (Issue 9). Code, identifiers and product copy are exempt. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
 - Every pull request targets this fork. `gh pr create` without `--repo` targets the upstream default remote. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
+- The Biome lint gate skips generated and vendored files. `skills-lock.json` and `.agents` are excluded in `biome.json`. GitHub Actions ran on this fork for the first time on 2026-07-30, and all four runs failed at the `Run Biome` step, so the build and the tests never ran. `npx skills add` writes `skills-lock.json` with two-space indents, which Biome formats with tabs, and a vendored skill file has an unbalanced code fence. This fork writes neither file. `skills` at the repository root holds this fork's own skills and stays in the gate. ([#35](https://github.com/LinkedListLLC/cyrus/pull/35))
 
 ## [0.2.67] - 2026-07-25
 
