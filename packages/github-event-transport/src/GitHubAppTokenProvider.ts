@@ -9,6 +9,16 @@ export interface GitHubAppTokenProviderConfig {
 	apiBaseUrl?: string;
 }
 
+/** How long before expiry a cached token is discarded and minted again. */
+export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+/** An installation token together with the instant it stops being valid. */
+export interface InstallationToken {
+	token: string;
+	/** Expiry as epoch milliseconds. */
+	expiresAt: number;
+}
+
 /**
  * Mints and caches GitHub App installation tokens for self-hosted users.
  *
@@ -31,9 +41,24 @@ export class GitHubAppTokenProvider {
 	 * Returns cached token if still valid, otherwise mints a new one.
 	 */
 	async getToken(): Promise<string> {
+		return (await this.getTokenWithExpiry()).token;
+	}
+
+	/**
+	 * Get a valid installation access token together with its expiry.
+	 *
+	 * Callers that must survive their own process (for example the
+	 * `cyrus github-token` CLI, which exits after every call) need the expiry
+	 * to keep a cache of their own. The in-process cache below is useless to
+	 * them.
+	 */
+	async getTokenWithExpiry(): Promise<InstallationToken> {
 		// Refresh 5 minutes before expiry
-		if (this.cachedToken && Date.now() < this.expiresAt - 5 * 60 * 1000) {
-			return this.cachedToken;
+		if (
+			this.cachedToken &&
+			Date.now() < this.expiresAt - TOKEN_REFRESH_MARGIN_MS
+		) {
+			return { token: this.cachedToken, expiresAt: this.expiresAt };
 		}
 
 		const pem = await this.loadPrivateKey();
@@ -67,7 +92,7 @@ export class GitHubAppTokenProvider {
 		this.cachedToken = data.token;
 		this.expiresAt = new Date(data.expires_at).getTime();
 
-		return this.cachedToken;
+		return { token: this.cachedToken, expiresAt: this.expiresAt };
 	}
 
 	private loadPrivateKey(): Promise<string> {

@@ -1,4 +1,8 @@
-import type { UserAccessControlConfig, UserIdentifier } from "cyrus-core";
+import type {
+	ReviewerMapping,
+	UserAccessControlConfig,
+	UserIdentifier,
+} from "cyrus-core";
 
 /**
  * Result of an access check operation.
@@ -23,7 +27,7 @@ export const DEFAULT_BLOCK_MESSAGE =
  * @param identifier - The identifier to match against
  * @returns true if the user matches the identifier
  */
-function userMatchesIdentifier(
+export function userMatchesIdentifier(
 	userId: string | undefined,
 	userEmail: string | undefined,
 	identifier: UserIdentifier,
@@ -57,6 +61,32 @@ function userMatchesAny(
 	return identifiers.some((identifier) =>
 		userMatchesIdentifier(userId, userEmail, identifier),
 	);
+}
+
+/**
+ * Find the GitHub handle of an issue-tracker user.
+ *
+ * Uses the same matcher as the allowlist and the blocklist, so a user is
+ * identified in one way throughout the configuration file.
+ *
+ * @param userId - The user's Linear ID
+ * @param userEmail - The user's email address
+ * @param reviewers - The repository's `reviewers` map
+ * @returns The GitHub handle, or undefined when the user is not in the map
+ */
+export function resolveReviewerHandle(
+	userId: string | undefined,
+	userEmail: string | undefined,
+	reviewers: ReviewerMapping[] | undefined,
+): string | undefined {
+	if (!reviewers?.length) {
+		return undefined;
+	}
+	const match = reviewers.find((reviewer) =>
+		userMatchesIdentifier(userId, userEmail, reviewer),
+	);
+	// An entry with a blank handle is the same as no entry at all.
+	return match?.github.trim() || undefined;
 }
 
 /**

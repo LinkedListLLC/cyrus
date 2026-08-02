@@ -7,30 +7,12 @@
 # env var below already uses `${VAR:-}`, so `-u` is safe here.
 set -euo pipefail
 
-# Non-interactive GitHub auth for cloning private repos. Provide a fine-grained
-# PAT (contents R/W on the target repos) as GH_TOKEN in the Dokploy env panel.
-# We rewrite github.com HTTPS URLs to embed the token (stateless, per boot), and
-# export GITHUB_TOKEN so the gh CLI and Cyrus's GitHub-App fallback pick it up.
-#
-# The rewrite goes into a git config file OUTSIDE $HOME, via GIT_CONFIG_GLOBAL.
-# It used to be written to /root/.gitconfig — the same $HOME every agent session
-# runs under — which put the PAT in cleartext on disk where a session could read
-# it. `buildHomeDirectoryDisallowedTools` is supposed to deny that read, but the
-# whole evidence base of this stack is that tool-layer denials are the layer that
-# gets bypassed, and a secret that is not on disk needs no denial. 0600, and
-# under /run (tmpfs on a normal host) so it does not outlive the container.
-#
-# GITHUB_TOKEN is still exported, so it remains readable in the environment of
-# any child process. That is inherent to how `gh` and Cyrus's GitHub-App
-# fallback consume it, and it is recorded in docs/DOKPLOY.md.
-if [ -n "${GH_TOKEN:-}" ]; then
-  export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/run/cyrus-git/config}"
-  mkdir -p "$(dirname "$GIT_CONFIG_GLOBAL")"
-  touch "$GIT_CONFIG_GLOBAL"
-  chmod 600 "$GIT_CONFIG_GLOBAL"
-  git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-  export GITHUB_TOKEN="${GH_TOKEN}"
-fi
+# GitHub identity (App installation token, or the personal-access-token
+# fallback). Extracted so it can be tested on its own — see
+# test/docker-github-identity.test.sh.
+# shellcheck source=docker-github-identity.sh
+. /app/docker-github-identity.sh
+cyrus_configure_github_identity
 
 # Seed a minimal config.json if none exists yet. `cyrus self-auth-linear` and
 # `cyrus self-add-repo` both require the file to already exist, but bare `cyrus`

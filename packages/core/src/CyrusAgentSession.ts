@@ -113,6 +113,16 @@ export interface CyrusAgentSession {
 		readOnlyReview?: boolean;
 		/** The review system prompt, reused verbatim when the review is resumed. */
 		reviewSystemPrompt?: string;
+		/**
+		 * GitHub handle of the person who delegated the issue, resolved once at
+		 * session creation from the repository's `reviewers` map.
+		 *
+		 * Held on the session because the pull request is opened in a later
+		 * subroutine, often after the session has been persisted and resumed,
+		 * and the delegating user is known only from the webhook that started
+		 * the session.
+		 */
+		reviewerGithubHandle?: string;
 	};
 }
 

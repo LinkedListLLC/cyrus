@@ -133,6 +133,13 @@ export interface IssueRunnerConfigInput {
 	 * (see `buildIssueConfig`).
 	 */
 	platformMcpConfigOverrides?: readonly string[];
+	/**
+	 * GitHub handle to request as reviewer on any pull request this session
+	 * opens — the person who delegated the issue, resolved from the
+	 * repository's `reviewers` map. Undefined when that person has no entry in
+	 * the map, and then no review is requested.
+	 */
+	reviewerGithubHandle?: string;
 	linearWorkspaceId?: string;
 	cyrusHome: string;
 	logger: ILogger;
@@ -320,7 +327,9 @@ export class RunnerConfigBuilder {
 		// A read-only session has no work to ship, so it gets no Stop guardrail —
 		// see `readOnlySession`.
 		const screenshotHooks = this.buildScreenshotHooks(log);
-		const prMarkerHook = buildPrMarkerHook(log);
+		const prMarkerHook = buildPrMarkerHook(log, undefined, {
+			reviewer: input.reviewerGithubHandle,
+		});
 		const intentToAddHook = buildIntentToAddHook(log);
 		const stopHook = input.readOnlySession ? {} : this.buildStopHook(log);
 		const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {

@@ -14,6 +14,7 @@
 		"test:packages": "pnpm --filter './packages/*' test",
 		"test:packages:run": "pnpm --filter './packages/*' test:run",
 		"test:apps": "pnpm --filter './apps/*' test",
+		"test:shell": "for t in test/*.test.sh; do bash \"$t\" || exit 1; done",
 		"typecheck": "pnpm -r typecheck",
 		"prepare": "husky"
 	},

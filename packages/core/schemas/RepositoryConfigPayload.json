@@ -581,6 +581,39 @@
 			},
 			"additionalProperties": false
 		},
+		"reviewers": {
+			"type": "array",
+			"items": {
+				"anyOf": [
+					{
+						"type": "object",
+						"properties": {
+							"id": {
+								"type": "string"
+							},
+							"github": {
+								"type": "string"
+							}
+						},
+						"required": ["id", "github"],
+						"additionalProperties": false
+					},
+					{
+						"type": "object",
+						"properties": {
+							"email": {
+								"type": "string"
+							},
+							"github": {
+								"type": "string"
+							}
+						},
+						"required": ["email", "github"],
+						"additionalProperties": false
+					}
+				]
+			}
+		},
 		"reviewOnStatus": {
 			"type": "string"
 		}
