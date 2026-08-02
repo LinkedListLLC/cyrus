@@ -7,7 +7,7 @@ This changelog documents internal development changes, refactors, tooling update
 This section covers the LinkedList fork only.
 
 ### Added
-- `docs/DOKPLOY.md` records the SSH workaround for the GitHub `workflow` scope. A push that touches `.github/workflows/` fails over HTTPS with an OAuth token that has no `workflow` scope, but the same push over SSH is accepted. The GitHub App authenticates with a token, so it needs the **Workflows: Read and write** permission. ([CYR-64](https://linear.app/linkedlist/issue/CYR-64))
+- `docs/DOKPLOY.md` records the SSH workaround for the GitHub `workflow` scope. A push that touches `.github/workflows/` fails over HTTPS with an OAuth token that has no `workflow` scope, but the same push over SSH is accepted. The GitHub App authenticates with a token, so it needs the **Workflows: Read and write** permission. ([CYR-64](https://linear.app/linkedlist/issue/CYR-64), [#38](https://github.com/LinkedListLLC/cyrus/pull/38))
 - Wayfinder planning skills (`wayfinder`, `research`, `grilling`, `prototype`, `domain-modeling`, `handoff`, `adhd`) under `.agents/skills`, symlinked into `.claude/skills` and pinned by `skills-lock.json`. This fork plans its own changes as Linear issues in the CYR team; conventions in `docs/agents/issue-tracker.md`. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
 - `docs/PERSONAS.md` — the persona specification the prompts are written to. ([CYR-37](https://linear.app/linkedlist/issue/CYR-37), [#27](https://github.com/LinkedListLLC/cyrus/pull/27))
 - `docs/REVIEW_ON_STATUS.md` — how the review trigger works, what is verified against a live workspace, and its known limits. ([CYR-16](https://linear.app/linkedlist/issue/CYR-16), [#26](https://github.com/LinkedListLLC/cyrus/pull/26))
