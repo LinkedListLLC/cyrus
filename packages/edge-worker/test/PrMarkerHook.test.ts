@@ -146,8 +146,24 @@ describe("buildPrMarkerHook", () => {
 		);
 
 		expect(a.ensureMarker).toHaveBeenCalledTimes(1);
-		expect(a.ensureMarker).toHaveBeenCalledWith("/work/repo", silentLogger);
+		expect(a.ensureMarker).toHaveBeenCalledWith("/work/repo", silentLogger, {});
 		expect(b.ensureMarker).not.toHaveBeenCalled();
+	});
+
+	it("passes the reviewer handle through to the provider", async () => {
+		const a = fakeProvider("a", /\bgh pr create\b/);
+
+		const hook = buildPrMarkerHook(silentLogger, [a.provider], {
+			reviewer: "rayan-gh",
+		});
+		await runHook(
+			hook.PostToolUse![0],
+			makeHookInput("gh pr create --title x", "/work/repo"),
+		);
+
+		expect(a.ensureMarker).toHaveBeenCalledWith("/work/repo", silentLogger, {
+			reviewer: "rayan-gh",
+		});
 	});
 
 	it("is a no-op when no provider matches the command", async () => {

@@ -21,6 +21,8 @@ export {
 	type RepositoryConfigPayload,
 	RepositoryConfigPayloadSchema,
 	RepositoryConfigSchema,
+	type ReviewerMapping,
+	ReviewerMappingSchema,
 	type RunnerType,
 	RunnerTypeSchema,
 	requireLinearWorkspaceId,

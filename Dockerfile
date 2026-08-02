@@ -131,6 +131,21 @@ RUN pnpm install --frozen-lockfile \
  && printf '#!/bin/sh\nexec node /app/apps/cli/dist/src/app.js "$@"\n' > /usr/local/bin/cyrus \
  && chmod +x /usr/local/bin/cyrus
 
+# Route every `gh` call through a wrapper that mints a fresh GitHub App
+# installation token — see docker-gh-shim.sh for why a token cannot be injected
+# once at boot. The wrapper calls `cyrus`, so this step must come after the
+# build step above that creates /usr/local/bin/cyrus.
+#
+# The move must also come after the `gh extension install` step near the top of
+# this file, which needs the real `gh` on PATH under its own name.
+#
+# The final `gh --version` is a build-time smoke test of the wrapper, not a
+# version check: the App variables are absent during the build, so it proves
+# the wrapper is executable and reaches the real binary on the inert path.
+RUN mv "$(command -v gh)" /usr/local/bin/gh-real \
+ && install -m 0755 /app/docker-gh-shim.sh /usr/local/bin/gh \
+ && gh --version
+
 # CYRUS_HOST_EXTERNAL=true → bind 0.0.0.0 so Traefik can reach the container.
 ENV CYRUS_SERVER_PORT=3456
 ENV CYRUS_HOST_EXTERNAL=true

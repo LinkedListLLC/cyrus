@@ -192,7 +192,10 @@ import type { IActivitySink } from "./sinks/IActivitySink.js";
 import { LinearActivitySink } from "./sinks/LinearActivitySink.js";
 import { ToolPermissionResolver } from "./ToolPermissionResolver.js";
 import type { AgentSessionData, EdgeWorkerEvents } from "./types.js";
-import { UserAccessControl } from "./UserAccessControl.js";
+import {
+	resolveReviewerHandle,
+	UserAccessControl,
+} from "./UserAccessControl.js";
 
 export declare interface EdgeWorker {
 	on<K extends keyof EdgeWorkerEvents>(
@@ -5318,6 +5321,12 @@ ${taskSection}`;
 			allowedDirectories,
 		} = sessionData;
 
+		// Record who to request as reviewer on the pull request this session
+		// opens. The webhook already carries the delegating user, so no extra
+		// Linear call is needed. Runs for a resumed session too, which is how a
+		// session created before this feature existed picks the handle up.
+		this.stampReviewerHandle(session, agentSession.creator, primaryRepo, log);
+
 		// Fetch labels early (needed for system prompt and runner selection)
 		const labels = await this.fetchIssueLabels(fullIssue);
 
@@ -7420,6 +7429,10 @@ ${input.userComment}
 			// `initializeReviewRunner` stamps the flag before building the config,
 			// and it survives on the session for resumes.
 			readOnlySession: session.metadata?.readOnlyReview === true,
+			// Also derived from the session: the delegating user is known only
+			// from the webhook that created the session, but the pull request is
+			// opened much later, often after a resume.
+			reviewerGithubHandle: session.metadata?.reviewerGithubHandle,
 			// Per-platform MCP config paths — GitHub + GitLab share the
 			// `githubMcpConfigs` knob (single-repo PR contexts both); Linear
 			// gets `linearMcpConfigs`. Not a blanket override: the builder
@@ -7568,6 +7581,43 @@ ${input.userComment}
 			return { allowed: false, reason: result.reason, userName };
 		}
 		return { allowed: true };
+	}
+
+	/**
+	 * Record the GitHub handle of the user who started this session, so that the
+	 * PR-marker hook can request them as reviewer.
+	 *
+	 * A pull request that a bot opens can be approved by everybody, but it
+	 * notifies nobody. GitHub sends a notification only for a requested review,
+	 * so without this the delegating user never learns the work is ready.
+	 *
+	 * A user who is absent from the repository's `reviewers` map only produces a
+	 * log line. The session continues, and the pull request opens with no
+	 * reviewer.
+	 */
+	private stampReviewerHandle(
+		session: CyrusAgentSession,
+		creator: AgentSessionCreatedWebhook["agentSession"]["creator"],
+		repository: RepositoryConfig,
+		log: ILogger,
+	): void {
+		const handle = resolveReviewerHandle(
+			creator?.id,
+			creator?.email,
+			repository.reviewers,
+		);
+
+		if (!handle) {
+			if (repository.reviewers?.length) {
+				log.info(
+					`No GitHub handle for ${creator?.name || creator?.id || "the delegating user"} in the "${repository.id}" reviewers map — the pull request will have no reviewer`,
+				);
+			}
+			return;
+		}
+
+		session.metadata = { ...session.metadata, reviewerGithubHandle: handle };
+		log.debug(`Will request @${handle} as reviewer on the pull request`);
 	}
 
 	/**

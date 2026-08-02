@@ -26,6 +26,20 @@ export const UserIdentifierSchema = z.union([
 ]);
 
 /**
+ * Maps an issue-tracker user to their GitHub handle, so that the person who
+ * delegated an issue can be requested as reviewer on the resulting pull
+ * request.
+ *
+ * The user half deliberately repeats the `UserIdentifierSchema` shape (`id` or
+ * `email`), so that one config file describes users in one way throughout.
+ * A bare string is not accepted here: an entry is useless without a handle.
+ */
+export const ReviewerMappingSchema = z.union([
+	z.object({ id: z.string(), github: z.string() }),
+	z.object({ email: z.string(), github: z.string() }),
+]);
+
+/**
  * User access control configuration for whitelisting/blacklisting users.
  */
 export const UserAccessControlConfigSchema = z.object({
@@ -323,6 +337,27 @@ export const RepositoryConfigSchema = z.object({
 
 	// Repository-specific user access control
 	userAccessControl: UserAccessControlConfigSchema.optional(),
+
+	/**
+	 * Issue-tracker user to GitHub handle mappings for this repository.
+	 *
+	 * When Cyrus opens a pull request, it requests a review from the person who
+	 * delegated the issue. Cyrus knows that person's Linear ID and email, but
+	 * GitHub needs a GitHub handle, and no automatic link exists between the
+	 * two. This map supplies it.
+	 *
+	 * A delegating user who is absent from this map gets a log line, and the
+	 * pull request opens with no reviewer.
+	 *
+	 * Example:
+	 * ```json
+	 * "reviewers": [
+	 *   { "email": "rayan@example.com", "github": "rayan-gh" },
+	 *   { "id": "usr_abc123", "github": "whollacsek" }
+	 * ]
+	 * ```
+	 */
+	reviewers: z.array(ReviewerMappingSchema).optional(),
 
 	/**
 	 * Name of the Linear workflow state that triggers an automatic, read-only
@@ -635,6 +670,7 @@ export function migrateEdgeConfig(
 
 // Infer types from schemas
 export type UserIdentifier = z.infer<typeof UserIdentifierSchema>;
+export type ReviewerMapping = z.infer<typeof ReviewerMappingSchema>;
 export type UserAccessControlConfig = z.infer<
 	typeof UserAccessControlConfigSchema
 >;

@@ -123,6 +123,128 @@ Practical upshot: use a **fine-grained PAT scoped to the specific repos**, never
 a classic `repo`-scoped token on an account with access to anything you would
 mind an agent session reaching.
 
+### GitHub App (recommended): give Cyrus its own identity
+
+A personal access token makes Cyrus **you** on GitHub. Every pull request Cyrus
+opens is authored by the account that owns the token. GitHub does not let a
+person approve their own pull request, and it never notifies a person about
+their own pull request. So the owner of the token can neither approve the work
+nor learn that it is ready.
+
+A GitHub App fixes both. Pull requests then come from `<app-slug>[bot]`, and
+every human on the team is a third party who can approve them. An App costs no
+GitHub seat, and its token is scoped per repository instead of carrying one
+person's whole account.
+
+#### Create and install the App
+
+1. Go to **Settings → Developer settings → GitHub Apps → New GitHub App** in the
+   organization that owns the repositories.
+2. Give it a name. The URL slug that GitHub derives from the name becomes the
+   bot login, for example `cyrus-linkedlist` → `cyrus-linkedlist[bot]`.
+3. **Webhook**: set the URL to `https://cyrus.<your-domain>/github-webhook` and
+   set the secret to the value you put in `GITHUB_WEBHOOK_SECRET`. This also
+   turns on the pull-request comment loop, so Cyrus answers `@` mentions on its
+   own pull requests. Clear the **Active** box if you do not want that loop.
+4. **Repository permissions**:
+
+   | Permission | Level | Why |
+   |---|---|---|
+   | **Contents** | Read and write | Clone the repository and push the branch |
+   | **Pull requests** | Read and write | `gh pr create`, and the reviewer request |
+   | **Issues** | Read and write | Comment on issues, and read issue comments |
+   | **Metadata** | Read | Mandatory baseline (selected automatically) |
+   | **Workflows** | Read and write *(optional)* | Only if agents may edit `.github/workflows/**` |
+
+5. **Generate a private key**. GitHub downloads a `.pem` file once. Keep it.
+6. **Install the App** on the repositories Cyrus works in. The installation ID
+   is the last number in the URL of the installation settings page:
+   `https://github.com/organizations/<org>/settings/installations/<installation-id>`.
+
+#### Put the private key in the volume
+
+The key goes at `/root/.cyrus/github-app.pem`, inside the `cyrus-data` volume,
+so it survives a redeploy. Open the Application's **Terminal** in Dokploy and
+paste the file:
+
+```bash
+cat > /root/.cyrus/github-app.pem <<'PEM'
+-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----
+PEM
+chmod 600 /root/.cyrus/github-app.pem
+```
+
+#### Environment variables
+
+```env
+GITHUB_APP_ID=<app id>                    # "App ID" on the App's General page
+GITHUB_APP_INSTALLATION_ID=<installation id>
+GITHUB_APP_SLUG=<url slug>                # optional, but see below
+GITHUB_APP_NAME=<display name>            # optional, defaults to <slug>[bot]
+```
+
+`GITHUB_APP_SLUG` is optional and only sets the **commit** author. Without it
+the pull request still comes from the bot, but the commits inside it keep the
+default git identity. With it, the entrypoint reads the bot's numeric user ID
+from the public GitHub API and sets `user.email` to
+`<bot-user-id>+<slug>[bot]@users.noreply.github.com`, which is how GitHub links
+a commit to the bot account. A failed lookup only prints a warning.
+
+Keep `GH_TOKEN` set as well if you want a fallback: Cyrus uses it only when it
+cannot mint an App token, and it says so in the log when it does.
+
+#### How the token reaches git and gh
+
+An App installation token expires **one hour** after it is minted, and agent
+sessions frequently run for longer than that. A token injected once, at
+container boot, would already be dead by the time the session opens its pull
+request. The image therefore mints a token on demand:
+
+- `cyrus github-token` prints a valid token. It caches the token at
+  `/root/.cyrus/github-token.json` (mode `0600`) and mints a new one when less
+  than 5 minutes of life remain.
+- `/usr/local/bin/gh` is a wrapper that calls `cyrus github-token` and then runs
+  the real GitHub CLI, which the image keeps at `/usr/local/bin/gh-real`.
+- A git credential helper calls the same command, so `git push` and `git fetch`
+  also get a fresh token.
+
+In App mode the entrypoint does **not** install the `url.insteadOf` rewrite that
+the personal-access-token mode uses. That rewrite embeds one fixed token in
+every remote URL, which would both pin a credential that dies after an hour and
+stop git from consulting the credential helper.
+
+With `GITHUB_APP_ID` and `GITHUB_APP_INSTALLATION_ID` unset, none of the above
+runs and the personal-access-token behaviour is unchanged.
+
+### Reviewer routing: tell the delegating user the work is ready
+
+A bot author lets everyone approve, but it notifies nobody. GitHub sends a
+notification only when a review is **requested**. Cyrus knows the Linear ID and
+the email of the person who delegated the issue, but GitHub needs a GitHub
+handle, and no automatic link exists between the two.
+
+Add a `reviewers` map to a repository in `/root/.cyrus/config.json`:
+
+```json
+{
+  "id": "job-boards",
+  "reviewers": [
+    { "email": "rayan@example.com", "github": "rayan-gh" },
+    { "id": "usr_abc123", "github": "whollacsek" }
+  ]
+}
+```
+
+Each entry identifies the user the same way the `userAccessControl` allowlist
+does — by `email` or by `id` — and adds their GitHub handle. When Cyrus opens a
+pull request, it requests a review from the person who delegated the issue.
+
+A delegating user who is absent from the map only produces a log line: the pull
+request opens with no reviewer, and the session continues. Cyrus never requests
+the pull request author, so the bot is never asked to review itself.
+
 #### Webhook authentication
 
 `WEBHOOK_IP_VALIDATION=false` is baked into the image, and correctly so: behind

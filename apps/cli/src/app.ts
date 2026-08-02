@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import { Application } from "./Application.js";
 import { AuthCommand } from "./commands/AuthCommand.js";
 import { CheckTokensCommand } from "./commands/CheckTokensCommand.js";
+import { GitHubTokenCommand } from "./commands/GitHubTokenCommand.js";
 import { PersonasCommand } from "./commands/PersonasCommand.js";
 import { RefreshTokenCommand } from "./commands/RefreshTokenCommand.js";
 import { SelfAddRepoCommand } from "./commands/SelfAddRepoCommand.js";
@@ -111,6 +112,20 @@ program
 			errorReporter,
 		);
 		await new RefreshTokenCommand(app).execute([]);
+	});
+
+// GitHub token command - print a currently valid GitHub credential
+program
+	.command("github-token")
+	.description(
+		"Print a valid GitHub token to stdout. Prefers a GitHub App installation token (minted on demand and cached on disk), and falls back to GITHUB_TOKEN.",
+	)
+	.action(async () => {
+		const opts = program.opts();
+		// No Application here: its constructor logs to stdout, and stdout must
+		// hold the token alone. The env file is already loaded by
+		// preloadEnvForBootstrap() above.
+		await new GitHubTokenCommand(opts.cyrusHome).execute([]);
 	});
 
 // Self-auth-linear command - Linear OAuth directly from CLI

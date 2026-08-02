@@ -1,7 +1,11 @@
-export type { GitHubAppTokenProviderConfig } from "./GitHubAppTokenProvider.js";
+export type {
+	GitHubAppTokenProviderConfig,
+	InstallationToken,
+} from "./GitHubAppTokenProvider.js";
 export {
 	createAppJwt,
 	GitHubAppTokenProvider,
+	TOKEN_REFRESH_MARGIN_MS,
 } from "./GitHubAppTokenProvider.js";
 export type {
 	AddReactionParams,
