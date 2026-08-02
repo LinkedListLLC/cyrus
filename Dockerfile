@@ -69,16 +69,25 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.220
 # xAI publishes no official npm package (`@xai/grok-cli` does not exist; the npm
 # results are third-party forks), so this is their install script.
 #
-# ⚠️ RESIDUAL RISK, NAMED: this is the one unpinned, unverified remote script
-# executed at build time. `curl | bash` from x.ai means whatever that URL serves
-# on the day of the build runs as root with full network access, and there is no
-# checksum, signature or version selector to pin against — the installer offers
-# none, and xAI publishes no artifact we could hash. It is accepted only because
-# there is no alternative distribution channel for this CLI, and it is bounded
-# two ways: `GROK_EXPECTED_VERSION` below fails the build if the resolved binary
-# is not the version we tested, so a change cannot land silently, and
+# ⚠️ RESIDUAL RISK, NAMED: this is the one unverified remote script executed at
+# build time. `curl | bash` from x.ai means whatever that URL serves on the day
+# of the build runs as root with full network access, and there is no checksum
+# or signature to verify it against — xAI publishes no artifact we could hash.
+# It is accepted only because there is no alternative distribution channel for
+# this CLI, and it is bounded three ways: the installer takes the wanted version
+# as its first argument, so the *binary* is pinned even though the *script* is
+# not; `GROK_EXPECTED_VERSION` below then asserts what actually landed; and
 # `GROK_DISABLE_AUTOUPDATER=1` stops the binary replacing itself at runtime.
-# If xAI ever ships a versioned tarball or npm package, replace this.
+#
+# The version argument is load-bearing, not decoration. This block used to run
+# the installer bare, which resolves to "latest stable", while the assertion
+# stayed pinned to a fixed version. That pairing fails the build on the day xAI
+# ships anything — and it did, when 0.2.118 replaced 0.2.114 and every deploy
+# stopped. Pinning the install makes the build reproducible; the assertion then
+# only has to catch an installer that ignores its own argument.
+#
+# Leave `GROK_EXPECTED_VERSION` empty to take the latest and skip both the pin
+# and the assertion.
 #
 # The installer keeps the real binary in $HOME/.grok/downloads and installs only
 # *symlinks* to it — both at $GROK_BIN_DIR/grok and, when running as root, at
@@ -92,16 +101,20 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.220
 # cost us auth persistence.
 ARG GROK_EXPECTED_VERSION=0.2.114
 RUN GROK_TMP="$(mktemp -d)" \
+ # Fetch the installer to a file rather than piping it, so the version can be
+ # passed as an argument. Unquoted on purpose: an empty GROK_EXPECTED_VERSION
+ # must expand to no argument at all, which is what selects "latest stable".
+ && curl -fsSL https://x.ai/cli/install.sh -o "$GROK_TMP/install.sh" \
  && HOME="$GROK_TMP" GROK_BIN_DIR="$GROK_TMP/bin" \
-      bash -c 'curl -fsSL https://x.ai/cli/install.sh | bash' \
+      bash "$GROK_TMP/install.sh" $GROK_EXPECTED_VERSION \
  && GROK_REAL="$(readlink -f "$GROK_TMP/bin/grok")" \
  && rm -f /usr/local/bin/grok /usr/local/bin/agent \
  && cp "$GROK_REAL" /usr/local/bin/grok \
  && chmod +x /usr/local/bin/grok \
  && rm -rf "$GROK_TMP" \
- # Assert the version rather than just proving the binary runs. This is the
- # only check standing between an unpinned installer and the image, so it
- # fails the build on a drift instead of logging it. Override with
+ # Assert the version rather than just proving the binary runs. With the pin
+ # above this should never fire; it stays because it is what would catch an
+ # installer that silently ignores its version argument. Override with
  # `--build-arg GROK_EXPECTED_VERSION=` (empty) to accept whatever ships.
  && GROK_ACTUAL="$(grok --version | tr -d '\r')" \
  && echo "grok: $GROK_ACTUAL (expected ${GROK_EXPECTED_VERSION:-any})" \
