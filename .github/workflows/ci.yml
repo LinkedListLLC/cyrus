@@ -46,7 +46,10 @@ jobs:
     
     - name: Run Tests
       run: pnpm -r test:run
-    
+
+    - name: Run Shell Tests
+      run: pnpm test:shell
+
     - name: Upload coverage
       uses: codecov/codecov-action@v3
       continue-on-error: true
