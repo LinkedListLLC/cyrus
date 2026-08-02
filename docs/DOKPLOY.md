@@ -98,6 +98,27 @@ and the `gh` CLI (exported as `GITHUB_TOKEN`), so one token covers both.
 covers clone/push/PR; add `workflow` if touching workflow files, `read:org` if
 you hit org-visibility issues.
 
+#### Pushing a change that touches `.github/workflows/`
+
+GitHub refuses a push over **HTTPS** when the token has no `workflow` scope:
+
+```
+refusing to allow an OAuth App to create or update workflow
+.github/workflows/ci.yml without `workflow` scope
+```
+
+This rule applies to OAuth tokens. It does not apply to **SSH keys**. GitHub
+accepts the same push over SSH. You do not change a scope, and you do not run
+`gh auth refresh`:
+
+```bash
+git push git@github.com:LinkedListLLC/cyrus.git <branch>
+```
+
+SSH is a workaround for a person, but not for Cyrus. The GitHub App
+authenticates with a token, so GitHub applies the OAuth rule to it. Give the App
+the **Workflows: Read and write** permission if agents must edit CI.
+
 #### What the agent sessions can see
 
 Scope the token as if the agent can read it, because it can.
