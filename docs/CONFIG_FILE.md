@@ -80,6 +80,23 @@ The review session is read-only by construction: it can read code and run read-o
 
 Omit this field to disable automatic reviews for the repository (the default). See [REVIEW_ON_STATUS.md](REVIEW_ON_STATUS.md) for details.
 
+### `reviewers` (array of objects)
+
+Gives the GitHub handle of each Linear user who can delegate issues to this repository. Each entry identifies the user by `email` or by Linear `id`, in the same way as the `userAccessControl` allowlist.
+
+```json
+{
+  "reviewers": [
+    { "email": "dev@example.com", "github": "dev-handle" },
+    { "id": "usr_abc123", "github": "other-handle" }
+  ]
+}
+```
+
+When Cyrus opens a pull request, it requests a review from the person who delegated the issue. If that person is absent from the map, Cyrus writes a log line. The pull request then opens with no reviewer, and the session continues.
+
+See [DOKPLOY.md](DOKPLOY.md#reviewer-routing-tell-the-delegating-user-the-work-is-ready) for the full explanation.
+
 ---
 
 ## Routing Priority Order
