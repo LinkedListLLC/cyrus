@@ -90,11 +90,13 @@ Matching is case-insensitive on the label name. The file hot-reloads — no rede
 Global fallbacks for any persona go in `promptDefaults` at the top level of the config, keyed by
 the same names.
 
-**Deployed state (2026-07-27).** All three repositories in the self-hosted instance — `cyrus`,
-`SalonPrive`, `job-boards` — carry exactly the two Wayfinder keys above and no `appendInstruction`.
-The `scoper` / `builder` / `orchestrator` entries that previously held the `wayfinder:*` labels
-were removed with them, so those three personas are currently unrouted; they are reachable again
-by giving them their own labels. Verified by reading the live `config.json`, not inferred.
+**Deployed state (2026-08-03).** The three repositories in the self-hosted instance — `cyrus`,
+`SalonPrive`, `job-boards` — carry the same three keys and no `appendInstruction`. The keys are
+`wayfinder` and `wayfinder-task` as shown above, plus `refactorer` on the `Refactor` label with
+`allowedTools: "all"`. The refactorer gets `all` and not `safe` because the `safe` preset withholds
+`Bash`. A refactorer that cannot run the tests cannot prove that the behaviour did not change. That
+proof is the persona's whole purpose. The `scoper` / `builder` / `orchestrator` entries stay
+unrouted; give them their own labels to make them reachable again.
 
 ### Tool presets
 
