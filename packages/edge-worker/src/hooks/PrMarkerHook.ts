@@ -107,13 +107,23 @@ export class GitHubPrMarkerProvider implements PrMarkerProvider {
 				},
 			);
 			payload = JSON.parse(json) as GitHubPrPayload;
-		} catch {
+		} catch (err) {
 			// No PR for this branch yet, gh not authenticated, or not a GitHub
-			// repo. Either way, nothing for us to ensure — bail silently.
+			// repo. This used to bail silently, which is a plausible place for
+			// the whole feature to have been dying unseen: `gh pr view` runs in
+			// the Cyrus process, not the agent's shell, so it can fail for
+			// reasons the session never sees — and the `gh` wrapper now mints a
+			// token per call, which is one more way for it to fail here alone.
+			log.warn(
+				`[PrMarkerHook] gh pr view failed in ${cwd}: ${(err as Error).message}`,
+			);
 			return;
 		}
 
 		if (typeof payload.number !== "number") {
+			log.warn(
+				`[PrMarkerHook] gh pr view returned no PR number in ${cwd} — nothing to mark`,
+			);
 			return;
 		}
 
@@ -290,6 +300,16 @@ export function buildPrMarkerHook(
 	],
 	context: PrMarkerContext = {},
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+	// Probe 1 — registration. This hook has never been observed running: no log
+	// line has ever carried "[PrMarkerHook]", and no pull request Cyrus has
+	// opened carries the marker it exists to add. Every link between here and
+	// the session was traced and is correct, so the question is empirical, not
+	// structural: is the hook registered, is the SDK calling it, and does it see
+	// the command? These three lines answer that in one delegation.
+	log.info(
+		`[PrMarkerHook] registered — reviewer=${context.reviewer ?? "none"} providers=${providers.length}`,
+	);
+
 	return {
 		PostToolUse: [
 			{
@@ -300,10 +320,26 @@ export function buildPrMarkerHook(
 						const command =
 							(post.tool_input as { command?: string } | undefined)?.command ??
 							"";
+						// Probe 2 — invocation. Logged BEFORE matching, because a hook
+						// that fires but never matches and a hook that never fires are
+						// indistinguishable otherwise, and that ambiguity is what has
+						// made this undiagnosable. Truncated: commands can be long, and
+						// only the head is needed to tell `gh pr create` from anything
+						// else.
+						log.info(
+							`[PrMarkerHook] PostToolUse(Bash) — command="${command.slice(0, 120)}"`,
+						);
 						const provider = providers.find((p) => p.matches(command));
 						if (!provider) {
+							// Probe 3 — no match. Was previously a bare `return {}`.
+							log.debug(
+								`[PrMarkerHook] no provider matched — not a PR/MR command`,
+							);
 							return {};
 						}
+						log.info(
+							`[PrMarkerHook] ${provider.name} matched — running ensureMarker in ${post.cwd}`,
+						);
 						try {
 							provider.ensureMarker(post.cwd, log, context);
 						} catch (err) {

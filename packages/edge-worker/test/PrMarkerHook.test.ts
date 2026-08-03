@@ -193,4 +193,38 @@ describe("buildPrMarkerHook", () => {
 
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
 	});
+
+	// These two probes exist because this hook has never been observed running:
+	// no log line has ever carried "[PrMarkerHook]", and no pull request Cyrus
+	// opened carries the marker. Without them, "the hook never fired" and "the
+	// hook fired and matched nothing" look identical — which is precisely the
+	// ambiguity that made the failure undiagnosable. Asserted so they cannot be
+	// tidied away as noise, the way the reviewer path's silence once was.
+	describe("diagnostic probes", () => {
+		it("announces that it was registered, and with which reviewer", () => {
+			const info = vi.fn();
+			const log: ILogger = { ...silentLogger, info } as unknown as ILogger;
+
+			buildPrMarkerHook(log, [], { reviewer: "RayanBn" });
+
+			expect(info).toHaveBeenCalledWith(
+				expect.stringContaining("[PrMarkerHook] registered"),
+			);
+			expect(info).toHaveBeenCalledWith(
+				expect.stringContaining("reviewer=RayanBn"),
+			);
+		});
+
+		it("reports every Bash invocation, including one that matches nothing", async () => {
+			const info = vi.fn();
+			const log: ILogger = { ...silentLogger, info } as unknown as ILogger;
+
+			const hook = buildPrMarkerHook(log, []);
+			await runHook(hook.PostToolUse![0], makeHookInput("ls -la"));
+
+			expect(info).toHaveBeenCalledWith(
+				expect.stringContaining('command="ls -la"'),
+			);
+		});
+	});
 });
