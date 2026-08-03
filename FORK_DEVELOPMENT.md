@@ -150,6 +150,29 @@ pm2 logs cyrus --lines 200
 
 ---
 
+## Shell tests
+
+This repository also has shell tests in `test/*.test.sh`. Run them from the repository root:
+
+```bash
+pnpm test:shell
+```
+
+| Test | What it covers |
+|------|----------------|
+| `test/docker-gh-shim.test.sh` | The `gh` wrapper in the container. The wrapper mints a GitHub App token for each call. |
+| `test/docker-github-identity.test.sh` | The entrypoint credential setup, in both of its modes: GitHub App, and the earlier behaviour when the App variables are absent. |
+
+CI runs both tests in the **Run Shell Tests** step.
+
+The tests read the environment they run in. If your shell exports `GITHUB_APP_ID` or `GITHUB_APP_INSTALLATION_ID`, unset them first. If you do not, the "App variables absent" cases fail:
+
+```bash
+env -u GITHUB_APP_ID -u GITHUB_APP_INSTALLATION_ID pnpm test:shell
+```
+
+---
+
 ## Logging (what agents should collect)
 
 ### Console levels
