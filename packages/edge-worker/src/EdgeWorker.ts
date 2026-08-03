@@ -7611,17 +7611,35 @@ ${input.userComment}
 			repository.reviewers,
 		);
 
+		// Always report the outcome, and always with the inputs that produced it.
+		//
+		// This used to log only when a map existed AND no entry matched, which
+		// made the two ways of failing indistinguishable from success: a repo
+		// carrying no map, and a webhook carrying no creator, both produced total
+		// silence. The feature was dead for days in production and no log line
+		// said so — the absence of the old message was read as "it matched",
+		// which sent the investigation to the wrong layer twice.
+		//
+		// One line per session is cheap. Not being able to tell working from
+		// broken is not.
+		const inputs =
+			`repo="${repository.id}" reviewers=${repository.reviewers?.length ?? 0} ` +
+			`creator.id=${creator?.id ? "yes" : "no"} creator.email=${creator?.email ? "yes" : "no"}`;
+
 		if (!handle) {
-			if (repository.reviewers?.length) {
-				log.info(
-					`No GitHub handle for ${creator?.name || creator?.id || "the delegating user"} in the "${repository.id}" reviewers map — the pull request will have no reviewer`,
-				);
-			}
+			log.info(
+				`No reviewer will be requested on the pull request — ${inputs}. ` +
+					(repository.reviewers?.length
+						? `${creator?.name || creator?.id || "the delegating user"} is not in this repository's reviewers map.`
+						: `This repository has no reviewers map, so routing is off.`),
+			);
 			return;
 		}
 
 		session.metadata = { ...session.metadata, reviewerGithubHandle: handle };
-		log.debug(`Will request @${handle} as reviewer on the pull request`);
+		log.info(
+			`Will request @${handle} as reviewer on the pull request — ${inputs}`,
+		);
 	}
 
 	/**

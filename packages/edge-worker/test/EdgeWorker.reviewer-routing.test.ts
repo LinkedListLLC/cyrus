@@ -154,25 +154,57 @@ describe("EdgeWorker — reviewer routing", () => {
 
 		expect(session.metadata?.reviewerGithubHandle).toBeUndefined();
 		expect(log.info).toHaveBeenCalledWith(
-			expect.stringContaining("No GitHub handle for Stranger"),
+			expect.stringContaining(
+				"Stranger is not in this repository's reviewers map",
+			),
+		);
+		// The inputs travel with the outcome, so a live log says why.
+		expect(log.info).toHaveBeenCalledWith(
+			expect.stringContaining("reviewers=1"),
 		);
 	});
 
-	it("stays quiet when the repository configures no reviewers at all", () => {
+	// This case previously asserted `log.info` was NOT called. That silence was
+	// specified, not accidental — and it is what made the feature fail invisibly
+	// in production: a repository whose map never reached memory looked exactly
+	// like one where routing succeeded. Reversed deliberately.
+	it("says routing is off when the repository configures no reviewers at all", () => {
 		const session = stamp(makeRepository(undefined), {
 			id: "usr_rayan",
 			email: "rayan@example.com",
 		});
 
 		expect(session.metadata?.reviewerGithubHandle).toBeUndefined();
-		expect(log.info).not.toHaveBeenCalled();
+		expect(log.info).toHaveBeenCalledWith(
+			expect.stringContaining("no reviewers map, so routing is off"),
+		);
+		expect(log.info).toHaveBeenCalledWith(
+			expect.stringContaining("reviewers=0"),
+		);
 	});
 
-	it("tolerates a webhook with no creator", () => {
+	it("tolerates a webhook with no creator, and says the creator was missing", () => {
 		const repository = makeRepository([
 			{ email: "rayan@example.com", github: "rayan-gh" },
 		]);
 
 		expect(() => stamp(repository, undefined)).not.toThrow();
+		// Distinguishes "the map is wrong" from "the webhook carried nobody" —
+		// two failures that were previously indistinguishable in the log.
+		expect(log.info).toHaveBeenCalledWith(
+			expect.stringContaining("creator.id=no creator.email=no"),
+		);
+	});
+
+	it("reports a successful match too, so success is visible not assumed", () => {
+		const repository = makeRepository([
+			{ email: "rayan@example.com", github: "rayan-gh" },
+		]);
+
+		stamp(repository, { id: "usr_rayan", email: "rayan@example.com" });
+
+		expect(log.info).toHaveBeenCalledWith(
+			expect.stringContaining("Will request @rayan-gh as reviewer"),
+		);
 	});
 });
