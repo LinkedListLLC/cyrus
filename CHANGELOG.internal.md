@@ -17,6 +17,7 @@ This section covers the LinkedList fork only.
 - `docs/upstream/allowed-tools-fallback-unreachable.md` — a write-up of the upstream defect behind CYR-28. Not filed upstream yet. ([CYR-28](https://linear.app/linkedlist/issue/CYR-28), [#24](https://github.com/LinkedListLLC/cyrus/pull/24))
 
 ### Changed
+- `docs/CONFIG_FILE.md` records the per-repository `reviewers` map, which `docs/DOKPLOY.md` documented alone. The entry gives the two identifier forms (`email` or Linear `id`), the `github` handle, and what occurs when the delegating user is absent from the map. ([CYR-66](https://linear.app/linkedlist/issue/CYR-66))
 - `FORK_DEVELOPMENT.md` records the shell tests in `test/*.test.sh`, what each one covers, and that CI runs them as the **Run Shell Tests** step. Local runs need `GITHUB_APP_ID` and `GITHUB_APP_INSTALLATION_ID` unset. ([CYR-65](https://linear.app/linkedlist/issue/CYR-65), [#39](https://github.com/LinkedListLLC/cyrus/pull/39))
 - User-facing output follows ASD-STE100 Simplified Technical English (Issue 9). Code, identifiers and product copy are exempt. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
 - Every pull request targets this fork. `gh pr create` without `--repo` targets the upstream default remote. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
