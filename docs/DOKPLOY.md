@@ -209,9 +209,24 @@ GITHUB_APP_NAME=<display name>            # optional, defaults to <slug>[bot]
 `GITHUB_APP_SLUG` is optional and only sets the **commit** author. Without it
 the pull request still comes from the bot, but the commits inside it keep the
 default git identity. With it, the entrypoint reads the bot's numeric user ID
-from the public GitHub API and sets `user.email` to
+from the public GitHub API and uses
 `<bot-user-id>+<slug>[bot]@users.noreply.github.com`, which is how GitHub links
 a commit to the bot account. A failed lookup only prints a warning.
+
+The entrypoint sets that identity **twice**: in the git config, and as
+`GIT_AUTHOR_*` / `GIT_COMMITTER_*` in the environment. The second is the one
+that decides. The session prompt gives the agent the *assignee's* GitHub
+noreply address, and agents infer from it that they should commit as that
+person — observed runs did exactly that while the git config held the correct
+bot identity. Git reads `GIT_AUTHOR_*` ahead of configuration, so exporting it
+outranks the global file and anything a session sets with `git config` or
+`git -c`. Only an explicit `git commit --author=...` beats it.
+
+> **Attribution moves to the bot, not to nobody.** With this set, git history
+> no longer records which person a change was delegated for. The Linear issue
+> and the pull request still carry that, so the link is preserved — it just
+> lives outside the commit. If you would rather keep it in the commit, add a
+> `Co-Authored-By:` trailer in the persona prompt instead of unsetting this.
 
 Keep `GH_TOKEN` set as well if you want a fallback: Cyrus uses it only when it
 cannot mint an App token, and it says so in the log when it does.

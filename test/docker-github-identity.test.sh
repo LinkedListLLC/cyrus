@@ -76,6 +76,12 @@ STUB
     # correct outcome for that case: the script writes no git config file.
     git config --global --list 2>/dev/null || true
     echo "GITHUB_TOKEN=${GITHUB_TOKEN:-}"
+    # The exported identity matters as much as the config file: git reads
+    # GIT_AUTHOR_* ahead of configuration, and it is what survives an agent
+    # session setting `user.email` for itself.
+    echo "GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-}"
+    echo "GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-}"
+    echo "GIT_COMMITTER_EMAIL=${GIT_COMMITTER_EMAIL:-}"
     stat -f '%Lp' "$GIT_CONFIG_GLOBAL" 2>/dev/null \
       || stat -c '%a' "$GIT_CONFIG_GLOBAL" 2>/dev/null \
       || echo "no-config-file"
@@ -129,6 +135,12 @@ OUT="$(run_identity GITHUB_APP_ID=1 GITHUB_APP_INSTALLATION_ID=2 \
   GITHUB_APP_SLUG=cyrus-linkedlist CYRUS_STUB_BOT_ID=987654)"
 assert_contains "$OUT" "user.name=cyrus-linkedlist[bot]"
 assert_contains "$OUT" "user.email=987654+cyrus-linkedlist[bot]@users.noreply.github.com"
+# The config alone did not hold in production — the session prompt hands the
+# agent a human's noreply address and observed runs committed as that person.
+# GIT_AUTHOR_* outranks configuration, so it is what actually decides.
+assert_contains "$OUT" "GIT_AUTHOR_NAME=cyrus-linkedlist[bot]"
+assert_contains "$OUT" "GIT_AUTHOR_EMAIL=987654+cyrus-linkedlist[bot]@users.noreply.github.com"
+assert_contains "$OUT" "GIT_COMMITTER_EMAIL=987654+cyrus-linkedlist[bot]@users.noreply.github.com"
 
 CASE="GITHUB_APP_NAME overrides the display name"
 echo "- $CASE"
@@ -136,11 +148,19 @@ OUT="$(run_identity GITHUB_APP_ID=1 GITHUB_APP_INSTALLATION_ID=2 \
   GITHUB_APP_SLUG=cyrus-linkedlist GITHUB_APP_NAME="Cyrus" CYRUS_STUB_BOT_ID=987654)"
 assert_contains "$OUT" "user.name=Cyrus"
 
-CASE="a failed bot lookup only warns"
+CASE="GITHUB_APP_NAME also names the commit author"
+echo "- $CASE"
+OUT="$(run_identity GITHUB_APP_ID=1 GITHUB_APP_INSTALLATION_ID=2 \
+  GITHUB_APP_SLUG=cyrus-linkedlist GITHUB_APP_NAME="Cyrus" CYRUS_STUB_BOT_ID=987654)"
+assert_contains "$OUT" "GIT_AUTHOR_NAME=Cyrus"
+
+CASE="a failed bot lookup exports nothing, so a human identity is never forced"
 echo "- $CASE"
 OUT="$(run_identity GITHUB_APP_ID=1 GITHUB_APP_INSTALLATION_ID=2 \
   GITHUB_APP_SLUG=cyrus-linkedlist)"
 assert_not_contains "$OUT" "user.email="
+assert_contains "$OUT" "GIT_AUTHOR_EMAIL="
+assert_not_contains "$OUT" "GIT_AUTHOR_EMAIL=987654"
 # The credential helper is still installed, so the container still works.
 assert_contains "$OUT" "credential.https://github.com.helper"
 

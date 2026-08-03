@@ -102,9 +102,31 @@ cyrus_configure_bot_commit_identity() {
     return 0
   fi
 
-  git config --global user.name "${GITHUB_APP_NAME:-$bot_login}"
-  git config --global user.email "${bot_id}+${bot_login}@users.noreply.github.com"
-  echo ">> Git commit identity: $(git config --global user.name) <$(git config --global user.email)>"
+  local bot_name="${GITHUB_APP_NAME:-$bot_login}"
+  local bot_email="${bot_id}+${bot_login}@users.noreply.github.com"
+
+  git config --global user.name "$bot_name"
+  git config --global user.email "$bot_email"
+
+  # Also export the identity, because the git config alone does not hold.
+  #
+  # The session prompt hands the agent the *assignee's* GitHub noreply address
+  # (PromptBuilder builds it; standard-issue-assigned-user-prompt.md carries it
+  # in the <assignee> block). Nothing instructs the agent to commit as that
+  # person, but agents infer it, and observed runs did exactly that: every
+  # commit on the bot's own pull requests carried a human's name while this
+  # file held the correct bot identity.
+  #
+  # Git resolves the author as GIT_AUTHOR_* first and configuration second, so
+  # exporting wins over both the global file and anything the session sets with
+  # `git config` or `git -c`. Only an explicit `git commit --author=...` beats
+  # it, and nothing asks for that.
+  export GIT_AUTHOR_NAME="$bot_name"
+  export GIT_AUTHOR_EMAIL="$bot_email"
+  export GIT_COMMITTER_NAME="$bot_name"
+  export GIT_COMMITTER_EMAIL="$bot_email"
+
+  echo ">> Git commit identity: $bot_name <$bot_email> (config + GIT_AUTHOR_*)"
 }
 
 # Non-interactive GitHub auth for cloning private repos. Provide a fine-grained
