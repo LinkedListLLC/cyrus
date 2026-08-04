@@ -671,7 +671,11 @@ export class EdgeWorker extends EventEmitter {
 		this.attachmentService = new AttachmentService(
 			this.logger,
 			this.cyrusHome,
-			this.config.linearWorkspaces || {},
+			// Read the workspace configs on each use. `this.config` is replaced on
+			// every config reload, and OAuth tokens are refreshed while the process
+			// runs, so a snapshot goes stale and downloads then fail with 401.
+			() => this.config.linearWorkspaces || {},
+			(workspaceId) => this.refreshLinearWorkspaceToken(workspaceId),
 		);
 		this.runnerSelectionService = new RunnerSelectionService(this.config);
 		this.toolPermissionResolver = new ToolPermissionResolver(
@@ -3061,22 +3065,20 @@ ${taskSection}`;
 	 * When an OAuth token is refreshed (at least once per day), the new token is
 	 * persisted to config.json which triggers the file watcher.  This method
 	 * compares the previous in-memory tokens against the new config and calls
-	 * `setAccessToken()` on any affected `LinearIssueTrackerService` instances,
-	 * and pushes the updated workspace configs to `AttachmentService`.
+	 * `setAccessToken()` on any affected `LinearIssueTrackerService` instances.
+	 *
+	 * `AttachmentService` needs no update here — it reads `this.config` through
+	 * a provider, so it always sees the current token.
 	 */
 	private updateLinearWorkspaceTokens(newConfig: EdgeWorkerConfig): void {
 		const oldWorkspaces = this.config.linearWorkspaces ?? {};
 		const newWorkspaces = newConfig.linearWorkspaces ?? {};
-
-		let anyTokenChanged = false;
 
 		for (const [workspaceId, newWsConfig] of Object.entries(newWorkspaces)) {
 			const oldToken = oldWorkspaces[workspaceId]?.linearToken;
 			const newToken = newWsConfig.linearToken;
 
 			if (oldToken === newToken) continue;
-
-			anyTokenChanged = true;
 
 			// Update existing issue tracker in-place
 			const issueTracker = this.issueTrackers.get(workspaceId);
@@ -3101,11 +3103,27 @@ ${taskSection}`;
 				);
 			}
 		}
+	}
 
-		if (anyTokenChanged) {
-			// Push refreshed workspace configs to AttachmentService
-			this.attachmentService.setLinearWorkspaces(newWorkspaces);
+	/**
+	 * Force an OAuth token refresh for a Linear workspace.
+	 *
+	 * Attachment downloads use plain HTTP instead of the Linear GraphQL client,
+	 * so they cannot use its automatic refresh-and-retry. They call this after a
+	 * 401 and repeat the request with the new token.
+	 *
+	 * @returns The new access token, or null if the refresh is not possible
+	 */
+	private async refreshLinearWorkspaceToken(
+		workspaceId: string,
+	): Promise<string | null> {
+		const issueTracker = this.issueTrackers.get(workspaceId) as
+			| LinearIssueTrackerService
+			| undefined;
+		if (typeof issueTracker?.refreshAccessToken !== "function") {
+			return null;
 		}
+		return await issueTracker.refreshAccessToken();
 	}
 
 	/**
@@ -3914,13 +3932,10 @@ ${taskSection}`;
 
 				// Download attachments from the new description
 				// Use organizationId from webhook as the Linear-native workspace ID source
-				const linearToken = this.getLinearTokenForWorkspace(
-					webhook.organizationId,
-				);
 				const downloadResult = await this.downloadCommentAttachments(
 					issueData.description,
 					attachmentsDir,
-					linearToken,
+					webhook.organizationId,
 					existingAttachmentCount,
 				);
 
@@ -5863,13 +5878,11 @@ ${taskSection}`;
 			).length;
 
 			// Download new attachments from the comment
-			const linearTokenForAttachments =
-				this.getLinearTokenForWorkspace(linearWorkspaceId);
 			const downloadResult = comment
 				? await this.downloadCommentAttachments(
 						comment.body,
 						attachmentsDir,
-						linearTokenForAttachments,
+						linearWorkspaceId,
 						existingAttachmentCount,
 					)
 				: {
@@ -6582,13 +6595,13 @@ ${taskSection}`;
 	 * Download attachments from a specific comment
 	 * @param commentBody The body text of the comment
 	 * @param attachmentsDir Directory where attachments should be saved
-	 * @param linearToken Linear API token
+	 * @param linearWorkspaceId Linear workspace ID for token lookup
 	 * @param existingAttachmentCount Current number of attachments already downloaded
 	 */
 	private async downloadCommentAttachments(
 		commentBody: string,
 		attachmentsDir: string,
-		linearToken: string | null,
+		linearWorkspaceId: string | null,
 		existingAttachmentCount: number,
 	): Promise<{
 		newAttachmentMap: Record<string, string>;
@@ -6599,7 +6612,7 @@ ${taskSection}`;
 		return this.attachmentService.downloadCommentAttachments(
 			commentBody,
 			attachmentsDir,
-			linearToken,
+			linearWorkspaceId,
 			existingAttachmentCount,
 		);
 	}
