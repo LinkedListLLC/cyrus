@@ -31,9 +31,63 @@ export class GitHubAppTokenProvider {
 	private cachedToken: string | null = null;
 	private expiresAt = 0;
 	private privateKeyPromise: Promise<string> | null = null;
+	private appSlugPromise: Promise<string> | null = null;
 
 	constructor(config: GitHubAppTokenProviderConfig) {
 		this.config = config;
+	}
+
+	/**
+	 * Read the App's URL slug from GitHub — for example `cyrus-william`.
+	 *
+	 * The slug is the handle a person types to @mention this agent on a pull
+	 * request, so it is the only name the agent can tell people to use. It is a
+	 * property of the App itself, which makes it the one source that is always
+	 * correct for the App that is actually running.
+	 *
+	 * The result is cached for the life of the process. The slug changes only
+	 * when somebody renames the App, which is rare and needs a restart anyway.
+	 */
+	getAppSlug(): Promise<string> {
+		if (!this.appSlugPromise) {
+			this.appSlugPromise = this.fetchAppSlug().catch((error) => {
+				// Do not cache a failure: a transient network error must not
+				// deny the slug for the rest of the process lifetime.
+				this.appSlugPromise = null;
+				throw error;
+			});
+		}
+		return this.appSlugPromise;
+	}
+
+	private async fetchAppSlug(): Promise<string> {
+		const pem = await this.loadPrivateKey();
+		const jwt = createAppJwt(this.config.appId, pem);
+		const apiBase = this.config.apiBaseUrl ?? "https://api.github.com";
+
+		const response = await fetch(`${apiBase}/app`, {
+			headers: {
+				Authorization: `Bearer ${jwt}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+		});
+
+		if (!response.ok) {
+			const body = await response.text();
+			throw new Error(
+				`[GitHubAppTokenProvider] Failed to read the App: ${response.status} ${response.statusText} - ${body}`,
+			);
+		}
+
+		const data = (await response.json()) as { slug?: string };
+		if (!data.slug) {
+			throw new Error(
+				"[GitHubAppTokenProvider] The App response contains no slug",
+			);
+		}
+
+		return data.slug;
 	}
 
 	/**

@@ -264,7 +264,10 @@ printf 'GITHUB_WEBHOOK_SECRET=%s\n' "$GITHUB_WEBHOOK_SECRET" >> ~/.cyrus/.env
 # App ID (for token minting)
 printf 'GITHUB_APP_ID=%s\n' "$GITHUB_APP_ID" >> ~/.cyrus/.env
 
-# Bot username (for mention filtering — see note below about GitHub autocomplete)
+# Bot username (for mention filtering — see note below about GitHub autocomplete).
+# Setting this makes Cyrus answer only the PR comments that @mention it. Leave
+# it out and Cyrus reads the App slug from GitHub for the tip it puts in each
+# PR, but answers every comment.
 printf 'GITHUB_BOT_USERNAME=%s\n' "$GITHUB_APP_SLUG" >> ~/.cyrus/.env
 
 # Private key (multi-line — stored as a separate file)
