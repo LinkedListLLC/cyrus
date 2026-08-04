@@ -204,9 +204,10 @@ GITHUB_APP_ID=<app id>                    # "App ID" on the App's General page
 GITHUB_APP_INSTALLATION_ID=<installation id>
 GITHUB_APP_SLUG=<url slug>                # optional, but see below
 GITHUB_APP_NAME=<display name>            # optional, defaults to <slug>[bot]
+GITHUB_BOT_USERNAME=<mention handle>      # optional, see "Which handle to mention"
 ```
 
-`GITHUB_APP_SLUG` is optional and only sets the **commit** author. Without it
+`GITHUB_APP_SLUG` is optional and sets the **commit** author. Without it
 the pull request still comes from the bot, but the commits inside it keep the
 default git identity. With it, the entrypoint reads the bot's numeric user ID
 from the public GitHub API and uses
@@ -230,6 +231,26 @@ outranks the global file and anything a session sets with `git config` or
 
 Keep `GH_TOKEN` set as well if you want a fallback: Cyrus uses it only when it
 cannot mint an App token, and it says so in the log when it does.
+
+#### Which handle to mention
+
+Every pull request that Cyrus opens ends with a tip that names the handle to
+@mention to reach the agent. The handle belongs to the App, so Cyrus reads it
+from the deployment. It uses the first of these that it finds:
+
+1. `GITHUB_BOT_USERNAME`.
+2. `GITHUB_APP_SLUG`.
+3. The App's own slug, read from the GitHub API at start-up.
+
+Set nothing and the third source applies, which is correct for most
+deployments. Set `GITHUB_BOT_USERNAME` only when the handle people type is not
+the App slug. GitHub autocompletes real user accounts only, so teams that want
+autocomplete register a user account and point mentions at it. That name can
+differ from the slug.
+
+`GITHUB_BOT_USERNAME` does one more thing: it limits which pull-request
+comments wake Cyrus to the comments that @mention it. The other two sources do
+not. Leave it unset and Cyrus reads every comment on its pull requests.
 
 #### How the token reaches git and gh
 

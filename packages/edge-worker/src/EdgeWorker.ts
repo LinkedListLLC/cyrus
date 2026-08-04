@@ -288,6 +288,11 @@ export class EdgeWorker extends EventEmitter {
 	private linearEventTransport: LinearEventTransport | null = null; // Single event transport for webhook delivery
 	private gitHubEventTransport: GitHubEventTransport | null = null; // GitHub event transport for forwarded GitHub webhooks
 	private gitHubAppTokenProvider: GitHubAppTokenProvider | null = null; // Self-hosted GitHub App token minting
+	/**
+	 * The App slug read from GitHub at start-up, used only when the environment
+	 * names no handle. See {@link resolveGitHubBotUsername}.
+	 */
+	private gitHubAppSlug: string | null = null;
 	private gitLabEventTransport: GitLabEventTransport | null = null; // GitLab event transport for forwarded GitLab webhooks
 	private slackEventTransport: SlackEventTransport | null = null;
 	private chatSessionHandler: ChatSessionHandler<SlackWebhookEvent> | null =
@@ -1042,7 +1047,8 @@ export class EdgeWorker extends EventEmitter {
 
 	/**
 	 * Register the GitHub event transport for receiving forwarded GitHub webhooks from CYHOST.
-	 * This creates a /github-webhook endpoint that handles @cyrusagent mentions on GitHub PRs.
+	 * This creates a /github-webhook endpoint that handles mentions of this
+	 * instance's bot handle on GitHub PRs.
 	 */
 	private registerGitHubEventTransport(): void {
 		// Use direct GitHub signature verification only when BOTH:
@@ -1122,6 +1128,8 @@ export class EdgeWorker extends EventEmitter {
 				"GitHub App token provider initialized (self-hosted mode)",
 			);
 		}
+
+		this.resolveGitHubBotUsername();
 
 		this.logger.info(
 			`GitHub event transport registered (${verificationMode} mode)`,
@@ -1372,14 +1380,24 @@ export class EdgeWorker extends EventEmitter {
 
 			const isPullRequestReview = isPullRequestReviewPayload(event.payload);
 
-			// Skip comments from the bot itself to prevent infinite loops
-			const botUsername = process.env.GITHUB_BOT_USERNAME;
-			if (botUsername && commentAuthor === botUsername) {
+			// Skip comments from the bot itself to prevent infinite loops.
+			// A GitHub App writes under `<slug>[bot]`, so accept both spellings.
+			const botHandle = this.getGitHubBotUsername();
+			if (
+				botHandle &&
+				(commentAuthor === botHandle || commentAuthor === `${botHandle}[bot]`)
+			) {
 				this.logger.debug(
-					`Ignoring comment from bot user @${botUsername} on ${repoFullName}#${prNumber}`,
+					`Ignoring comment from bot user @${commentAuthor} on ${repoFullName}#${prNumber}`,
 				);
 				return;
 			}
+
+			// Which comments wake Cyrus stays keyed to the explicit environment
+			// variable. Reading the handle from the App gives every deployment a
+			// name to print, and it must not also start filtering out comments on
+			// deployments that never asked for that filter.
+			const botUsername = process.env.GITHUB_BOT_USERNAME;
 
 			// For pull_request_review events, defensively check review state
 			// (must happen before the mention check — reviews don't contain @mentions)
@@ -7225,13 +7243,78 @@ ${input.userComment}
 	}
 
 	/**
+	 * The GitHub handle a person types to @mention this agent.
+	 *
+	 * A pull request that Cyrus opens tells the reader which handle wakes it up.
+	 * That handle belongs to the GitHub App this instance runs as, so it differs
+	 * for every deployment and must never be hardcoded. Three sources, in order:
+	 *
+	 *   1. `GITHUB_BOT_USERNAME` — an operator override. It wins because the
+	 *      handle people type is not always the App slug: GitHub only
+	 *      autocompletes real user accounts, so teams often register a user
+	 *      account under a different name and point mentions at it.
+	 *   2. `GITHUB_APP_SLUG` — already set by Docker deployments for the commit
+	 *      identity, and free of an API call.
+	 *   3. The slug of the App itself, read through the GitHub API by
+	 *      {@link resolveGitHubBotUsername}. This source needs no configuration.
+	 *
+	 * Empty when this instance runs no GitHub App and no operator set a handle.
+	 */
+	private getGitHubBotUsername(): string {
+		return (
+			process.env.GITHUB_BOT_USERNAME ||
+			process.env.GITHUB_APP_SLUG ||
+			this.gitHubAppSlug ||
+			""
+		);
+	}
+
+	/**
+	 * Read the App slug from GitHub, so that {@link getGitHubBotUsername} has an
+	 * answer even when nothing in the environment names a handle.
+	 *
+	 * The read runs in the background: it must not hold up webhook registration,
+	 * and it completes long before the first session starts. A failure only
+	 * costs the tip at the end of a pull request body.
+	 */
+	private resolveGitHubBotUsername(): void {
+		const configured = this.getGitHubBotUsername();
+		if (configured) {
+			this.logger.info(`GitHub bot handle: @${configured}`);
+			return;
+		}
+
+		const provider = this.gitHubAppTokenProvider;
+		if (!provider) {
+			this.logger.debug(
+				"No GitHub bot handle: set GITHUB_BOT_USERNAME, or configure a GitHub App",
+			);
+			return;
+		}
+
+		provider
+			.getAppSlug()
+			.then((slug) => {
+				this.gitHubAppSlug = slug;
+				this.logger.info(`GitHub bot handle: @${slug} (read from the App)`);
+			})
+			.catch((error: unknown) => {
+				this.logger.warn(
+					`Could not read the GitHub App slug, so pull requests will not name a handle to mention: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			});
+	}
+
+	/**
 	 * Build an <agent_context> block with dynamic values that skills can reference.
 	 *
 	 * Provides bot usernames so skills (e.g. verify-and-ship) can refer to the
 	 * correct bot account without hardcoding.
 	 */
 	private buildAgentContextBlock(): string {
-		const githubBot = process.env.GITHUB_BOT_USERNAME || "";
+		const githubBot = this.getGitHubBotUsername();
 		const gitlabBot = process.env.GITLAB_BOT_USERNAME || "";
 
 		if (!githubBot && !gitlabBot) {

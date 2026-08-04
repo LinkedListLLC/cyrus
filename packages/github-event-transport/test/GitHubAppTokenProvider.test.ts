@@ -193,6 +193,125 @@ describe("GitHubAppTokenProvider", () => {
 		fetchSpy.mockRestore();
 	});
 
+	it("reads the App slug from the GitHub API", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(JSON.stringify({ slug: "cyrus-william" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		const provider = new GitHubAppTokenProvider({
+			appId: "12345",
+			installationId: "67890",
+			privateKeyPath: pemPath,
+		});
+
+		expect(await provider.getAppSlug()).toBe("cyrus-william");
+
+		const [url, opts] = fetchSpy.mock.calls[0];
+		expect(url).toBe("https://api.github.com/app");
+		expect(
+			(opts as RequestInit).headers as Record<string, string>,
+		).toHaveProperty("Authorization");
+
+		fetchSpy.mockRestore();
+	});
+
+	it("returns the cached App slug on subsequent calls", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(JSON.stringify({ slug: "cyrus-william" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		const provider = new GitHubAppTokenProvider({
+			appId: "12345",
+			installationId: "67890",
+			privateKeyPath: pemPath,
+		});
+
+		expect(await provider.getAppSlug()).toBe("cyrus-william");
+		expect(await provider.getAppSlug()).toBe("cyrus-william");
+		expect(fetchSpy).toHaveBeenCalledOnce();
+
+		fetchSpy.mockRestore();
+	});
+
+	it("retries the App slug after a failure", async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response("Unauthorized", {
+					status: 401,
+					statusText: "Unauthorized",
+				}),
+			)
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ slug: "cyrus-william" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+
+		const provider = new GitHubAppTokenProvider({
+			appId: "12345",
+			installationId: "67890",
+			privateKeyPath: pemPath,
+		});
+
+		await expect(provider.getAppSlug()).rejects.toThrow(
+			"Failed to read the App: 401",
+		);
+		expect(await provider.getAppSlug()).toBe("cyrus-william");
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+		fetchSpy.mockRestore();
+	});
+
+	it("throws when the App response has no slug", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(JSON.stringify({ name: "Cyrus" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		const provider = new GitHubAppTokenProvider({
+			appId: "12345",
+			installationId: "67890",
+			privateKeyPath: pemPath,
+		});
+
+		await expect(provider.getAppSlug()).rejects.toThrow("contains no slug");
+
+		fetchSpy.mockRestore();
+	});
+
+	it("reads the App slug from a custom API base URL", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(JSON.stringify({ slug: "cyrus-enterprise" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		const provider = new GitHubAppTokenProvider({
+			appId: "12345",
+			installationId: "67890",
+			privateKeyPath: pemPath,
+			apiBaseUrl: "https://github.example.com/api/v3",
+		});
+
+		await provider.getAppSlug();
+
+		const [url] = fetchSpy.mock.calls[0];
+		expect(url).toBe("https://github.example.com/api/v3/app");
+
+		fetchSpy.mockRestore();
+	});
+
 	it("supports custom API base URL", async () => {
 		const mockToken = "ghs_enterprise_token";
 		const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();

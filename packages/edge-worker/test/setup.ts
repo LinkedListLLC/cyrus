@@ -12,6 +12,14 @@ import { vi } from "vitest";
 // present in the developer's shell env.
 process.env.CYRUS_DISABLE_REMOTE_SESSION_STORE = "1";
 
+// Drop the bot-handle variables, so an assembled prompt is the same on a
+// developer machine, in a container that runs Cyrus, and in CI. They feed the
+// <agent_context> block, which the full-prompt assertions compare literally.
+// Tests that need a handle set one themselves.
+delete process.env.GITHUB_BOT_USERNAME;
+delete process.env.GITHUB_APP_SLUG;
+delete process.env.GITLAB_BOT_USERNAME;
+
 // Keep Claude SDK debug output inside the test workspace to avoid HOME write restrictions.
 const claudeConfigDir =
 	process.env.CLAUDE_CONFIG_DIR ??

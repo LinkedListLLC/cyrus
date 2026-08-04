@@ -49,8 +49,10 @@ At the end of the MR description (before the `<!-- generated-by-cyrus -->` marke
 ```
 ---
 
-> **Tip:** I will respond to comments that @ mention @<bot_username from agent_context> on this MR. You can also leave review comments, and I will automatically wake up to address each comment.
+> **Tip:** I will respond to comments that @ mention @<gitlab_bot_username from agent_context> on this MR. You can also leave review comments, and I will automatically wake up to address each comment.
 ```
+
+Take the handle from the `<gitlab_bot_username>` element in the `<agent_context>` block of your system prompt. If that element is absent, leave the tip out — do not guess a handle.
 
 This helps reviewers know how to interact with Cyrus directly on the MR.
 
