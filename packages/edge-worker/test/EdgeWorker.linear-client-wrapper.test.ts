@@ -235,16 +235,17 @@ describe("EdgeWorker LinearClient Wrapper", () => {
 			expect(setAccessTokenSpy).not.toHaveBeenCalled();
 		});
 
-		it("should update AttachmentService when workspace token changes", () => {
+		it("should give AttachmentService the token from the current config", () => {
 			edgeWorker = new EdgeWorker(mockConfig);
 
 			const attachmentService = (edgeWorker as any).attachmentService;
-			const setLinearWorkspacesSpy = vi.spyOn(
-				attachmentService,
-				"setLinearWorkspaces",
-			);
+			expect(
+				attachmentService.getLinearTokenForWorkspace("workspace-123"),
+			).toBe("test_token");
 
-			const newWorkspaces = {
+			// A config reload replaces the whole workspace record. AttachmentService
+			// keeps no copy, so it must report the token from the new record.
+			(edgeWorker as any).config.linearWorkspaces = {
 				"workspace-123": {
 					linearToken: "refreshed_token",
 					linearRefreshToken: "new_refresh_token",
@@ -252,14 +253,9 @@ describe("EdgeWorker LinearClient Wrapper", () => {
 				},
 			};
 
-			const newConfig: EdgeWorkerConfig = {
-				...mockConfig,
-				linearWorkspaces: newWorkspaces,
-			};
-
-			(edgeWorker as any).updateLinearWorkspaceTokens(newConfig);
-
-			expect(setLinearWorkspacesSpy).toHaveBeenCalledWith(newWorkspaces);
+			expect(
+				attachmentService.getLinearTokenForWorkspace("workspace-123"),
+			).toBe("refreshed_token");
 		});
 
 		it("should create a new issue tracker for a previously unknown workspace", () => {

@@ -301,6 +301,24 @@ export class LinearIssueTrackerService implements IIssueTrackerService {
 	}
 
 	/**
+	 * Force an OAuth token refresh and return the new access token.
+	 *
+	 * GraphQL requests refresh automatically through the patched client, but
+	 * plain HTTP callers (for example attachment downloads from
+	 * uploads.linear.app) cannot use that path. They call this method after a
+	 * 401 and retry with the returned token. Concurrent calls for the same
+	 * workspace share one refresh request.
+	 *
+	 * @returns The new access token, or null if OAuth refresh is not configured
+	 */
+	async refreshAccessToken(): Promise<string | null> {
+		if (!this.oauthConfig) return null;
+		const token = await this.doTokenRefresh();
+		this.setAccessToken(token);
+		return token;
+	}
+
+	/**
 	 * Get the underlying LinearClient instance.
 	 * Useful when callers need the same client with its OAuth refresh interceptor.
 	 */

@@ -197,7 +197,7 @@ describe("EdgeWorker - Native Attachments", () => {
 			const result = await (edgeWorker as any).downloadCommentAttachments(
 				commentBody,
 				attachmentsDir,
-				"test-token",
+				"test-workspace",
 				0, // No existing attachments
 			);
 
@@ -220,7 +220,7 @@ describe("EdgeWorker - Native Attachments", () => {
 			const result = await (edgeWorker as any).downloadCommentAttachments(
 				commentBody,
 				attachmentsDir,
-				"test-token",
+				"test-workspace",
 				19, // Already have 19 attachments, so only 1 more allowed with limit of 20
 			);
 
@@ -237,7 +237,7 @@ describe("EdgeWorker - Native Attachments", () => {
 			const result = await (edgeWorker as any).downloadCommentAttachments(
 				commentBody,
 				attachmentsDir,
-				"test-token",
+				"test-workspace",
 				0,
 			);
 
@@ -258,7 +258,7 @@ describe("EdgeWorker - Native Attachments", () => {
 			const result = await (edgeWorker as any).downloadCommentAttachments(
 				commentBody,
 				attachmentsDir,
-				"test-token",
+				"test-workspace",
 				0,
 			);
 
@@ -284,7 +284,7 @@ describe("EdgeWorker - Native Attachments", () => {
 			const result = await (edgeWorker as any).downloadCommentAttachments(
 				commentBody,
 				"/tmp/test-attachments",
-				"test-token",
+				"test-workspace",
 				0,
 			);
 
@@ -305,6 +305,117 @@ describe("EdgeWorker - Native Attachments", () => {
 				expect(url).not.toContain("]");
 				expect(url).not.toContain("(");
 			});
+		});
+	});
+
+	describe("downloadAttachment token handling", () => {
+		const url = "https://uploads.linear.app/workspace/upload/file";
+		const destination = "/tmp/test-attachments/attachment_1.tmp";
+
+		const okResponse = () =>
+			({
+				ok: true,
+				status: 200,
+				statusText: "OK",
+				arrayBuffer: async () => new ArrayBuffer(8),
+			}) as unknown as Response;
+
+		const unauthorizedResponse = () =>
+			({
+				ok: false,
+				status: 401,
+				statusText: "Unauthorized",
+				arrayBuffer: async () => new ArrayBuffer(0),
+			}) as unknown as Response;
+
+		const authHeaderOf = (call: any[]) => call[1].headers.Authorization;
+
+		it("reads the token for each download instead of a startup snapshot", async () => {
+			// A token refresh replaces the whole workspace record, exactly as a
+			// config reload does. The download must use the new token.
+			(edgeWorker as any).config.linearWorkspaces = {
+				"test-workspace": { linearToken: "refreshed-token" },
+			};
+			mockFetch.mockResolvedValue(okResponse());
+
+			const result = await (
+				edgeWorker as any
+			).attachmentService.downloadAttachment(
+				url,
+				destination,
+				"test-workspace",
+			);
+
+			expect(result.success).toBe(true);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(authHeaderOf(mockFetch.mock.calls[0])).toBe(
+				"Bearer refreshed-token",
+			);
+		});
+
+		it("refreshes the token once and repeats the request after a 401", async () => {
+			const refreshAccessToken = vi.fn().mockImplementation(async () => {
+				(edgeWorker as any).config.linearWorkspaces["test-workspace"] = {
+					linearToken: "token-after-refresh",
+				};
+				return "token-after-refresh";
+			});
+			(edgeWorker as any).issueTrackers.set("test-workspace", {
+				refreshAccessToken,
+			});
+
+			mockFetch
+				.mockResolvedValueOnce(unauthorizedResponse())
+				.mockResolvedValueOnce(okResponse());
+
+			const result = await (
+				edgeWorker as any
+			).attachmentService.downloadAttachment(
+				url,
+				destination,
+				"test-workspace",
+			);
+
+			expect(result.success).toBe(true);
+			expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+			expect(authHeaderOf(mockFetch.mock.calls[0])).toBe("Bearer test-token");
+			expect(authHeaderOf(mockFetch.mock.calls[1])).toBe(
+				"Bearer token-after-refresh",
+			);
+		});
+
+		it("reports a failed download when the refresh also fails", async () => {
+			(edgeWorker as any).issueTrackers.set("test-workspace", {
+				refreshAccessToken: vi
+					.fn()
+					.mockRejectedValue(new Error("refresh rejected")),
+			});
+			mockFetch.mockResolvedValue(unauthorizedResponse());
+
+			const result = await (
+				edgeWorker as any
+			).attachmentService.downloadAttachment(
+				url,
+				destination,
+				"test-workspace",
+			);
+
+			expect(result.success).toBe(false);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+		});
+
+		it("fails without a request when the workspace has no token", async () => {
+			const result = await (
+				edgeWorker as any
+			).attachmentService.downloadAttachment(
+				url,
+				destination,
+				"unknown-workspace",
+			);
+
+			expect(result.success).toBe(false);
+			expect(mockFetch).not.toHaveBeenCalled();
 		});
 	});
 

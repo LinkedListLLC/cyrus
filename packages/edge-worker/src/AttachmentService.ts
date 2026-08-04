@@ -8,35 +8,48 @@ import type {
 } from "cyrus-core";
 import { fileTypeFromBuffer } from "file-type";
 
+/**
+ * Reads the current Linear workspace configs. This is a function, not a
+ * snapshot, because OAuth access tokens are refreshed while the process runs.
+ * A stored copy goes stale and makes every download fail with 401.
+ */
+export type LinearWorkspacesProvider = () => Record<
+	string,
+	LinearWorkspaceConfig
+>;
+
+/**
+ * Forces an OAuth token refresh for a workspace and returns the new access
+ * token, or null if refresh is not possible.
+ */
+export type LinearTokenRefresher = (
+	workspaceId: string,
+) => Promise<string | null>;
+
 export class AttachmentService {
 	private logger: ILogger;
 	private cyrusHome: string;
-	private linearWorkspaces: Record<string, LinearWorkspaceConfig>;
+	private getLinearWorkspaces: LinearWorkspacesProvider;
+	private refreshLinearToken?: LinearTokenRefresher;
 
 	constructor(
 		logger: ILogger,
 		cyrusHome: string,
-		linearWorkspaces: Record<string, LinearWorkspaceConfig>,
+		getLinearWorkspaces: LinearWorkspacesProvider,
+		refreshLinearToken?: LinearTokenRefresher,
 	) {
 		this.logger = logger;
 		this.cyrusHome = cyrusHome;
-		this.linearWorkspaces = linearWorkspaces;
+		this.getLinearWorkspaces = getLinearWorkspaces;
+		this.refreshLinearToken = refreshLinearToken;
 	}
 
 	/**
-	 * Update the stored Linear workspace configs (e.g. after token refresh).
-	 */
-	setLinearWorkspaces(
-		linearWorkspaces: Record<string, LinearWorkspaceConfig>,
-	): void {
-		this.linearWorkspaces = linearWorkspaces;
-	}
-
-	/**
-	 * Get the Linear API token for a workspace
+	 * Get the Linear API token for a workspace.
+	 * Read this immediately before each request — never cache the result.
 	 */
 	private getLinearTokenForWorkspace(workspaceId: string): string | null {
-		const workspaceConfig = this.linearWorkspaces[workspaceId];
+		const workspaceConfig = this.getLinearWorkspaces()[workspaceId];
 		if (!workspaceConfig) {
 			return null; // CLI platform or unconfigured workspace — no token available
 		}
@@ -68,8 +81,7 @@ export class AttachmentService {
 		workspacePath: string,
 		issueTracker?: IIssueTrackerService,
 	): Promise<{ manifest: string; attachmentsDir: string | null }> {
-		const linearToken = this.getLinearTokenForWorkspace(linearWorkspaceId);
-		if (!linearToken) {
+		if (!this.getLinearTokenForWorkspace(linearWorkspaceId)) {
 			// CLI platform or unconfigured workspace — skip attachment download
 			return { manifest: "", attachmentsDir: null };
 		}
@@ -164,7 +176,7 @@ export class AttachmentService {
 				const result = await this.downloadAttachment(
 					url,
 					tempPath,
-					linearToken,
+					linearWorkspaceId,
 				);
 
 				if (result.success) {
@@ -220,21 +232,39 @@ export class AttachmentService {
 	}
 
 	/**
-	 * Download a single attachment from Linear
+	 * Download a single attachment from Linear.
+	 *
+	 * The token is read for each attempt. An expired token gives 401, so the
+	 * download refreshes the token one time and repeats the request.
 	 */
 	async downloadAttachment(
 		attachmentUrl: string,
 		destinationPath: string,
-		linearToken: string,
+		linearWorkspaceId: string,
 	): Promise<{ success: boolean; fileType?: string; isImage?: boolean }> {
 		try {
 			this.logger.debug(`Downloading attachment from: ${attachmentUrl}`);
 
-			const response = await fetch(attachmentUrl, {
-				headers: {
-					Authorization: `Bearer ${linearToken}`,
-				},
-			});
+			const linearToken = this.getLinearTokenForWorkspace(linearWorkspaceId);
+			if (!linearToken) {
+				this.logger.error(
+					`No Linear token for workspace ${linearWorkspaceId}, cannot download attachment`,
+				);
+				return { success: false };
+			}
+
+			let response = await this.fetchAttachment(attachmentUrl, linearToken);
+
+			if (response.status === 401 || response.status === 403) {
+				this.logger.warn(
+					`Attachment download got ${response.status}; refreshing the Linear token and trying again`,
+				);
+				const refreshedToken =
+					await this.refreshWorkspaceToken(linearWorkspaceId);
+				if (refreshedToken) {
+					response = await this.fetchAttachment(attachmentUrl, refreshedToken);
+				}
+			}
 
 			if (!response.ok) {
 				this.logger.error(
@@ -280,16 +310,46 @@ export class AttachmentService {
 	}
 
 	/**
+	 * Send one authenticated request for an attachment.
+	 */
+	private async fetchAttachment(
+		attachmentUrl: string,
+		linearToken: string,
+	): Promise<Response> {
+		return await fetch(attachmentUrl, {
+			headers: {
+				Authorization: `Bearer ${linearToken}`,
+			},
+		});
+	}
+
+	/**
+	 * Refresh the OAuth access token for a workspace.
+	 * Returns null if no refresher is wired up or the refresh fails.
+	 */
+	private async refreshWorkspaceToken(
+		linearWorkspaceId: string,
+	): Promise<string | null> {
+		if (!this.refreshLinearToken) return null;
+		try {
+			return await this.refreshLinearToken(linearWorkspaceId);
+		} catch (error) {
+			this.logger.error("Failed to refresh the Linear token:", error);
+			return null;
+		}
+	}
+
+	/**
 	 * Download attachments from a specific comment
 	 * @param commentBody The body text of the comment
 	 * @param attachmentsDir Directory where attachments should be saved
-	 * @param linearToken Linear API token
+	 * @param linearWorkspaceId Linear workspace ID for token lookup
 	 * @param existingAttachmentCount Current number of attachments already downloaded
 	 */
 	async downloadCommentAttachments(
 		commentBody: string,
 		attachmentsDir: string,
-		linearToken: string | null,
+		linearWorkspaceId: string | null,
 		existingAttachmentCount: number,
 	): Promise<{
 		newAttachmentMap: Record<string, string>;
@@ -297,7 +357,10 @@ export class AttachmentService {
 		totalNewAttachments: number;
 		failedCount: number;
 	}> {
-		if (!linearToken) {
+		if (
+			!linearWorkspaceId ||
+			!this.getLinearTokenForWorkspace(linearWorkspaceId)
+		) {
 			return {
 				newAttachmentMap: {},
 				newImageMap: {},
@@ -341,7 +404,11 @@ export class AttachmentService {
 			const tempFilename = `attachment_${attachmentNumber}.tmp`;
 			const tempPath = join(attachmentsDir, tempFilename);
 
-			const result = await this.downloadAttachment(url, tempPath, linearToken);
+			const result = await this.downloadAttachment(
+				url,
+				tempPath,
+				linearWorkspaceId,
+			);
 
 			if (result.success) {
 				// Determine the final filename based on type
