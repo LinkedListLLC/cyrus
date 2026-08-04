@@ -73,8 +73,22 @@ describe("GitHubPrMarkerProvider.matches", () => {
 		"gh pr edit 123 --body x",
 		"gt submit",
 		"  gt submit --stack  ",
+		// gh-stack. CYR-60 put this extension in the image, and JOB-197 proved
+		// it opens pull requests through a verb this matcher used to ignore.
+		"gh stack submit --auto --open 2>&1 | tail -25",
+		"gh  stack   submit",
 	])("matches %s", (cmd) => {
 		expect(provider.matches(cmd)).toBe(true);
+	});
+
+	// gh-stack has read-only and setup verbs too. Only `submit` mutates a pull
+	// request, so only `submit` should wake the hook.
+	it.each([
+		"gh stack view --json",
+		"gh stack init my-branch",
+		"gh stack --help",
+	])("rejects the non-submitting gh-stack verb: %s", (cmd) => {
+		expect(provider.matches(cmd)).toBe(false);
 	});
 
 	it.each([

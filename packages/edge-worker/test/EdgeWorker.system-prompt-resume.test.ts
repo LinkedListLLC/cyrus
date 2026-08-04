@@ -130,6 +130,10 @@ describe("EdgeWorker - System Prompt Resume", () => {
 		// Mock AgentSessionManager
 		mockAgentSessionManager = {
 			createCyrusAgentSession: vi.fn(),
+			// Reviewer routing asks the manager for the issue's earlier sessions,
+			// so that a later @mention cannot re-point the reviewer away from the
+			// person who delegated. No earlier session here.
+			getSessionsByIssueId: vi.fn().mockReturnValue([]),
 			getSession: vi.fn().mockReturnValue({
 				id: "agent-session-123",
 				externalSessionId: "agent-session-123",

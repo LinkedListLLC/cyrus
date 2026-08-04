@@ -216,6 +216,10 @@ describe("EdgeWorker - Runner Selection Based on Labels", () => {
 		// Mock AgentSessionManager
 		mockAgentSessionManager = {
 			createCyrusAgentSession: vi.fn(),
+			// Reviewer routing asks the manager for the issue's earlier sessions,
+			// so that a later @mention cannot re-point the reviewer away from the
+			// person who delegated. No earlier session here.
+			getSessionsByIssueId: vi.fn().mockReturnValue([]),
 			getSession: vi.fn().mockReturnValue({
 				issueId: "issue-123",
 				workspace: { path: "/test/workspaces/TEST-123" },
