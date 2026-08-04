@@ -88,8 +88,21 @@ export class GitHubPrMarkerProvider implements PrMarkerProvider {
 	matches(command: string): boolean {
 		// Strip surrounding shell noise; we only care whether the command line
 		// contains a PR-mutating gh/gt invocation.
+		//
+		// `gh stack submit` is here because CYR-60 put the gh-stack extension in
+		// the image on purpose, and it opens pull requests through a verb this
+		// list did not know. On JOB-197 the session ran `gh stack submit --auto`,
+		// this matcher ignored it, and the marker landed only because the agent
+		// happened to rewrite the description with `gh pr edit` seconds later.
+		// A session that does not do that leaves no marker and no reviewer.
+		//
+		// Known limitation: `gh stack submit` submits a whole stack, and
+		// `ensureMarker` reads the pull request for the branch checked out at
+		// `cwd`. Only that one gets the marker. Marking every pull request in a
+		// stack needs the stack listing, which is a larger change than this.
 		return (
 			/\bgh\s+pr\s+(create|edit)\b/.test(command) ||
+			/\bgh\s+stack\s+submit\b/.test(command) ||
 			/\bgt\s+submit\b/.test(command)
 		);
 	}

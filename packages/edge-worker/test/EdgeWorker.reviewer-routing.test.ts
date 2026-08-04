@@ -207,4 +207,154 @@ describe("EdgeWorker — reviewer routing", () => {
 			expect.stringContaining("Will request @rayan-gh as reviewer"),
 		);
 	});
+
+	/**
+	 * One issue can run several sessions: the delegation, then any number of
+	 * @mention follow-ups. The reviewer must stay the delegator.
+	 *
+	 * JOB-197 is the case these cover. Rayan's delegated session resolved
+	 * @RayanBn, did the work, then stopped after pushing without opening a pull
+	 * request. A later @mention started a second session with a different
+	 * creator, and that session opened the pull request — so the pull request
+	 * asked the commenter for a review, not the person who delegated.
+	 */
+	describe("a later session on the same issue", () => {
+		const ISSUE_ID = "issue_job_197";
+
+		/** A session that belongs to an issue, so inheritance is in play. */
+		function makeIssueSession(id: string): CyrusAgentSession {
+			return {
+				id,
+				createdAt: 1,
+				issueContext: {
+					trackerId: "linear",
+					issueId: ISSUE_ID,
+					issueIdentifier: "JOB-197",
+				},
+			} as CyrusAgentSession;
+		}
+
+		/**
+		 * Stamp `session` with `creator`, against a manager that already holds
+		 * `existing` sessions for the same issue.
+		 */
+		function stampWithHistory(
+			repository: RepositoryConfig,
+			session: CyrusAgentSession,
+			creator: { id?: string; email?: string; name?: string } | undefined,
+			existing: CyrusAgentSession[],
+		): CyrusAgentSession {
+			const worker = makeWorker(repository);
+			(worker as any).agentSessionManager = {
+				getSessionsByIssueId: vi.fn(() => [...existing, session]),
+			};
+			(worker as any).stampReviewerHandle(session, creator, repository, log);
+			return session;
+		}
+
+		const repository = makeRepository([
+			{ email: "rayan@example.com", github: "rayan-gh" },
+			{ email: "william@example.com", github: "whollacsek" },
+		]);
+
+		it("inherits the delegator's handle instead of the commenter's", () => {
+			const delegated = makeIssueSession("session-delegated");
+			delegated.createdAt = 100;
+			delegated.metadata = { reviewerGithubHandle: "rayan-gh" };
+
+			const mentioned = makeIssueSession("session-mentioned");
+			mentioned.createdAt = 200;
+
+			// The @mention came from William, who is himself in the map — so a
+			// wrong answer here is a plausible handle, not an empty one. That is
+			// exactly why the bug survived: the pull request had *a* reviewer.
+			stampWithHistory(
+				repository,
+				mentioned,
+				{
+					id: "usr_william",
+					email: "william@example.com",
+					name: "William",
+				},
+				[delegated],
+			);
+
+			expect(mentioned.metadata?.reviewerGithubHandle).toBe("rayan-gh");
+			expect(log.info).toHaveBeenCalledWith(
+				expect.stringContaining("inherited from the first session"),
+			);
+		});
+
+		it("takes the oldest handle when several earlier sessions carry one", () => {
+			const first = makeIssueSession("session-first");
+			first.createdAt = 100;
+			first.metadata = { reviewerGithubHandle: "rayan-gh" };
+
+			const middle = makeIssueSession("session-middle");
+			middle.createdAt = 150;
+			middle.metadata = { reviewerGithubHandle: "whollacsek" };
+
+			const latest = makeIssueSession("session-latest");
+			latest.createdAt = 200;
+
+			// Deliberately out of order: the fix must sort, not trust the map's
+			// insertion order.
+			stampWithHistory(repository, latest, { email: "william@example.com" }, [
+				middle,
+				first,
+			]);
+
+			expect(latest.metadata?.reviewerGithubHandle).toBe("rayan-gh");
+		});
+
+		it("resolves from its own creator when no earlier session carries a handle", () => {
+			const earlier = makeIssueSession("session-earlier");
+			earlier.createdAt = 100;
+
+			const current = makeIssueSession("session-current");
+			current.createdAt = 200;
+
+			// Backfill must survive: a session that predates this feature carries
+			// no handle, and the next session on the issue has to resolve one.
+			stampWithHistory(repository, current, { email: "rayan@example.com" }, [
+				earlier,
+			]);
+
+			expect(current.metadata?.reviewerGithubHandle).toBe("rayan-gh");
+			expect(log.info).toHaveBeenCalledWith(
+				expect.stringContaining("Will request @rayan-gh as reviewer"),
+			);
+		});
+
+		// A resumed session is handed back its own record by the manager. If it
+		// inherited from itself, the resolve path would never run again and the
+		// documented backfill would break.
+		it("does not inherit from itself", () => {
+			const current = makeIssueSession("session-current");
+			current.createdAt = 200;
+
+			stampWithHistory(repository, current, { email: "rayan@example.com" }, []);
+
+			expect(current.metadata?.reviewerGithubHandle).toBe("rayan-gh");
+		});
+
+		// A session with no issue has nothing to inherit from, and must not
+		// reach into the manager at all.
+		it("resolves normally for a standalone session with no issue", () => {
+			const worker = makeWorker(repository);
+			const getSessionsByIssueId = vi.fn(() => []);
+			(worker as any).agentSessionManager = { getSessionsByIssueId };
+			const session = { id: "session-standalone" } as CyrusAgentSession;
+
+			(worker as any).stampReviewerHandle(
+				session,
+				{ email: "rayan@example.com" },
+				repository,
+				log,
+			);
+
+			expect(session.metadata?.reviewerGithubHandle).toBe("rayan-gh");
+			expect(getSessionsByIssueId).not.toHaveBeenCalled();
+		});
+	});
 });

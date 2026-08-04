@@ -7605,6 +7605,29 @@ ${input.userComment}
 		repository: RepositoryConfig,
 		log: ILogger,
 	): void {
+		// One issue can run several sessions: the delegation, then any number of
+		// @mention follow-ups. Only the first is the delegation, and the reviewer
+		// must stay that person — a colleague who comments to nudge the agent has
+		// not taken the work over, and must not silently become the reviewer.
+		//
+		// JOB-197 is the case this exists for. The delegated session resolved
+		// @RayanBn correctly, did the work, then stopped after pushing without
+		// opening a pull request. A later @mention started a second session whose
+		// creator was somebody else, and *that* session opened the pull request —
+		// so the handle on it was the commenter's, not the delegator's.
+		const inherited = this.findReviewerHandleForIssue(session);
+		if (inherited) {
+			session.metadata = {
+				...session.metadata,
+				reviewerGithubHandle: inherited,
+			};
+			log.info(
+				`Will request @${inherited} as reviewer on the pull request — ` +
+					`inherited from the first session on this issue, not from this session's creator`,
+			);
+			return;
+		}
+
 		const handle = resolveReviewerHandle(
 			creator?.id,
 			creator?.email,
@@ -7640,6 +7663,36 @@ ${input.userComment}
 		log.info(
 			`Will request @${handle} as reviewer on the pull request — ${inputs}`,
 		);
+	}
+
+	/**
+	 * The reviewer handle an earlier session on the same issue already stamped.
+	 *
+	 * Sessions are read oldest first, so the delegation wins over every later
+	 * @mention. The session being stamped is skipped, because it is already
+	 * registered with the manager by the time this runs.
+	 *
+	 * Returns undefined for a standalone session with no issue, and for the
+	 * first session on an issue — both of which then resolve from their own
+	 * creator, which is the correct answer for them.
+	 *
+	 * Session metadata is serialized whole, so an inherited handle survives a
+	 * container restart along with the rest of the session.
+	 */
+	private findReviewerHandleForIssue(
+		session: CyrusAgentSession,
+	): string | undefined {
+		const issueId = session.issueContext?.issueId ?? session.issueId;
+		if (!issueId) {
+			return undefined;
+		}
+
+		return this.agentSessionManager
+			.getSessionsByIssueId(issueId)
+			.filter((other) => other.id !== session.id)
+			.sort((a, b) => a.createdAt - b.createdAt)
+			.find((other) => other.metadata?.reviewerGithubHandle)?.metadata
+			?.reviewerGithubHandle;
 	}
 
 	/**
