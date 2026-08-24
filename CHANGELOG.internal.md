@@ -7,6 +7,7 @@ This changelog documents internal development changes, refactors, tooling update
 This section covers the LinkedList fork only.
 
 ### Added
+- Infisical CLI in the Dokploy image, and `docker-infisical-identity.sh` at boot. A machine identity (Universal Auth) exchanges `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` for `INFISICAL_TOKEN` so `infisical run` in product worktrees works. The entrypoint unsets the long-lived pair after minting. Missing or bad credentials warn and continue — they do not take Cyrus down. Tests: `test/docker-infisical-identity.test.sh`.
 - `docs/DOKPLOY.md` records the SSH workaround for the GitHub `workflow` scope. A push that touches `.github/workflows/` fails over HTTPS with an OAuth token that has no `workflow` scope, but the same push over SSH is accepted. The GitHub App authenticates with a token, so it needs the **Workflows: Read and write** permission. ([CYR-64](https://linear.app/linkedlist/issue/CYR-64), [#38](https://github.com/LinkedListLLC/cyrus/pull/38))
 - Wayfinder planning skills (`wayfinder`, `research`, `grilling`, `prototype`, `domain-modeling`, `handoff`, `adhd`) under `.agents/skills`, symlinked into `.claude/skills` and pinned by `skills-lock.json`. This fork plans its own changes as Linear issues in the CYR team; conventions in `docs/agents/issue-tracker.md`. ([#27](https://github.com/LinkedListLLC/cyrus/pull/27))
 - `docs/PERSONAS.md` — the persona specification the prompts are written to. ([CYR-37](https://linear.app/linkedlist/issue/CYR-37), [#27](https://github.com/LinkedListLLC/cyrus/pull/27))

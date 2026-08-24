@@ -14,6 +14,13 @@ set -euo pipefail
 . /app/docker-github-identity.sh
 cyrus_configure_github_identity
 
+# Infisical machine identity (Universal Auth). Mints INFISICAL_TOKEN so
+# `infisical run` in product worktrees works. Warns and continues if the
+# pair is absent — see test/docker-infisical-identity.test.sh.
+# shellcheck source=docker-infisical-identity.sh
+. /app/docker-infisical-identity.sh
+cyrus_configure_infisical_identity
+
 # Seed a minimal config.json if none exists yet. `cyrus self-auth-linear` and
 # `cyrus self-add-repo` both require the file to already exist, but bare `cyrus`
 # does not create it — only the sub-directories. This makes first-run setup work
