@@ -124,8 +124,8 @@ Twenty-two features. The 54 commits map onto them with no remainder.
 
 * **Purpose:** build and run this fork as a headless container on Dokploy.
 * **Commits:** `1f919524`, `4bfb26f1`, `4b848f68`, `a6223e48`, `e8dc8cc4`, `af55a26c`, `3c7e9ea4` (7)
-* **Files:** `Dockerfile`, `docker-entrypoint.sh`, `.dockerignore`, `.gitignore`, `docs/DOKPLOY.md`
-* **Tests:** none. CI never builds the image. See risk R4.
+* **Files:** `Dockerfile`, `docker-entrypoint.sh`, `docker-github-identity.sh`, `docker-infisical-identity.sh`, `.dockerignore`, `.gitignore`, `docs/DOKPLOY.md`
+* **Tests:** `test/docker-github-identity.test.sh`, `test/docker-gh-shim.test.sh`, `test/docker-infisical-identity.test.sh`. CI runs the shell tests. CI never builds the image. See risk R4.
 * **Recommendation: keep.** Squash the eight commits into one. Six of them are
   doc additions to the same file, written as the deploy was debugged.
 * **Notes:** `4b848f68` seeds `config.json` because `cyrus self-auth-linear`
@@ -133,7 +133,8 @@ Twenty-two features. The 54 commits map onto them with no remainder.
 * **Added after this document was first written:** `e8e7f462` sets
   `CLAUDE_CONFIG_DIR` into the Dokploy volume, so a redeploy no longer deletes
   every Claude transcript and dead-ends the open sessions that resume them.
-  Fold it into the same commit.
+  Fold it into the same commit. **Added 2026-08-24:** Infisical CLI in the image
+  and `docker-infisical-identity.sh` at boot (Universal Auth → `INFISICAL_TOKEN`).
 
 ### F2 — Webhook IP allowlist off by default in the image
 

@@ -3,8 +3,8 @@
 This fork adds a `Dockerfile`, `docker-entrypoint.sh`, and `.dockerignore` so
 Cyrus can run as a single **Dokploy Application** (Dockerfile build type). It
 builds Cyrus **from source** (this is a fork you can customize), installs the
-runtime deps (`git`, `jq`, `gh` with the `gh-stack` extension, the Claude Code
-CLI), and runs the CLI server on port **3456**.
+runtime deps (`git`, `jq`, `gh` with the `gh-stack` extension, the Infisical
+CLI, the Claude Code CLI), and runs the CLI server on port **3456**.
 
 > Upstream Cyrus ships no container support and expects a Node process under
 > pm2/systemd with state in `~/.cyrus/`. These files package that for Dokploy.
@@ -13,7 +13,7 @@ CLI), and runs the CLI server on port **3456**.
 
 | Thing | How it's passed | Why |
 |---|---|---|
-| **Env vars / secrets** (`LINEAR_*`, `ANTHROPIC_API_KEY`, `CYRUS_BASE_URL`, `GH_TOKEN`, …) | Dokploy **Environment** panel | Cyrus reads `process.env` directly — the env page is enough. **No `.env` file mount needed.** |
+| **Env vars / secrets** (`LINEAR_*`, `ANTHROPIC_API_KEY`, `CYRUS_BASE_URL`, `GH_TOKEN`, `INFISICAL_CLIENT_*`, …) | Dokploy **Environment** panel | Cyrus reads `process.env` directly — the env page is enough. **No `.env` file mount needed.** |
 | **State**: Linear OAuth token (in `config.json` → `linearWorkspaces`), cloned repos, worktrees, deployed skills | A named **Volume Mount** at `/root/.cyrus` | Any non-mounted path is **wiped on every redeploy**. This mount is **required**. |
 | **`config.json`** (repos, routing, `allowedTools`, modes) | Created inside the volume by `cyrus self-add-repo`, then editable there (hot-reloaded) | Cyrus *writes* to `config.json`, so a File Mount (single-file, read-mostly) is the wrong tool — use the volume. |
 | **Claude conversation transcripts** (what a session needs to resume) | `CLAUDE_CONFIG_DIR=/root/.cyrus/claude`, set in the Dockerfile | Claude Code defaults to `/root/.claude`, outside the volume. See below. |
@@ -97,6 +97,38 @@ and the `gh` CLI (exported as `GITHUB_TOKEN`), so one token covers both.
 **Classic PAT (simpler, broader):** scope `repo` (full private-repo control)
 covers clone/push/PR; add `workflow` if touching workflow files, `read:org` if
 you hit org-visibility issues.
+
+### Infisical machine identity
+
+Product worktrees start Metro and Next through `infisical run`. The container
+cannot Google-login, so it uses a **machine identity** (Universal Auth) in org
+LinkedListLLC, named `cyrus`.
+
+Set these two variables in the Environment panel:
+
+```env
+INFISICAL_CLIENT_ID=<cyrus machine identity client id>
+INFISICAL_CLIENT_SECRET=<cyrus machine identity client secret>
+```
+
+At boot the entrypoint exchanges the pair for `INFISICAL_TOKEN` and **unsets**
+the client id and secret, so child processes inherit the token and not the
+long-lived credential. Agent sessions inherit `process.env`, so `infisical run`
+in a folder that has `.infisical.json` works.
+
+Rules:
+
+- Do **not** log the container in as a human Infisical user. That would overwrite
+  a person's CLI profile and is the wrong credential.
+- Omit **both** variables to skip Infisical. Agents can still run tests. They
+  cannot start Metro/Next against real env.
+- Set only one of the two and the entrypoint warns and continues.
+- A failed login also warns and continues, so a bad secret does not take Cyrus
+  down. Three failed logins lock the identity for five minutes.
+- The minted token lasts **30 days**. Restart the container before then, or
+  `infisical run` starts failing.
+- CI on pull requests still reads `*.example`. Infisical is for local and
+  Cyrus worktrees, not for GitHub Actions.
 
 #### Pushing a change that touches `.github/workflows/`
 
@@ -331,9 +363,14 @@ settings.
    CYRUS_HOST_EXTERNAL=true
    ANTHROPIC_API_KEY=<anthropic key>      # or CLAUDE_CODE_OAUTH_TOKEN
    GH_TOKEN=<github fine-grained PAT>
+   INFISICAL_CLIENT_ID=<cyrus machine identity client id>
+   INFISICAL_CLIENT_SECRET=<cyrus machine identity client secret>
    # CYRUS_SERVER_PORT defaults to 3456 (already set in the image)
    # WEBHOOK_IP_VALIDATION defaults to false in the image — see note below
    ```
+
+Infisical: see **Infisical machine identity** above. Omit both `INFISICAL_CLIENT_*`
+variables if you do not want agents to inject secrets.
 
    > **Webhook IP validation.** `CYRUS_HOST_EXTERNAL=true` (needed so the server
    > binds `0.0.0.0` for Traefik) makes Cyrus auto-enable a source-IP allowlist

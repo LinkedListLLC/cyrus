@@ -14,14 +14,22 @@
 FROM node:22-bookworm@sha256:7725a5c2c83eed1d36258c66efae14b1ceccd021db9ed1d9559d3335ed3d68ed
 
 # Runtime deps: git (clone + per-issue worktrees), jq (Claude Code stream-json
-# parsing), gh (PR creation). Installs the GitHub CLI apt repo.
+# parsing), gh (PR creation), infisical (secrets for product worktrees).
+# Installs the GitHub CLI apt repo, then the Infisical CLI apt repo.
+#
+# The Infisical setup script only adds the apt repo and key. apt-get then
+# installs the package. It is still a remote script executed at build time
+# (same class of risk as the grok installer below), but it does not run an
+# unpinned binary installer — `infisical --version` is the smoke test.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git jq curl ca-certificates gnupg \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
- && apt-get update && apt-get install -y --no-install-recommends gh \
+ && curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash \
+ && apt-get update && apt-get install -y --no-install-recommends gh infisical \
+ && infisical --version \
  && rm -rf /var/lib/apt/lists/*
 
 # GitHub's stacked-PR extension, so sessions can run `gh stack` (CYR-60).

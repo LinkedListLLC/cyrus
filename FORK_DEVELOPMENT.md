@@ -162,13 +162,16 @@ pnpm test:shell
 |------|----------------|
 | `test/docker-gh-shim.test.sh` | The `gh` wrapper in the container. The wrapper mints a GitHub App token for each call. |
 | `test/docker-github-identity.test.sh` | The entrypoint credential setup, in both of its modes: GitHub App, and the earlier behaviour when the App variables are absent. |
+| `test/docker-infisical-identity.test.sh` | The entrypoint Infisical login: missing pair, incomplete pair, Universal Auth success, login failure, missing CLI. |
 
 CI runs both tests in the **Run Shell Tests** step.
 
 The tests read the environment they run in. If your shell exports `GITHUB_APP_ID` or `GITHUB_APP_INSTALLATION_ID`, unset them first. If you do not, the "App variables absent" cases fail:
 
 ```bash
-env -u GITHUB_APP_ID -u GITHUB_APP_INSTALLATION_ID pnpm test:shell
+env -u GITHUB_APP_ID -u GITHUB_APP_INSTALLATION_ID \
+    -u INFISICAL_CLIENT_ID -u INFISICAL_CLIENT_SECRET -u INFISICAL_TOKEN \
+    pnpm test:shell
 ```
 
 ---
