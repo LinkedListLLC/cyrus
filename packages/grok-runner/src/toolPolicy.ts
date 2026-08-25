@@ -51,8 +51,18 @@ import {
 	splitShellCommands,
 } from "cyrus-core";
 
+// The shell-command matching below used to live here. It is engine-agnostic —
+// string matching over a shell command and a list of `Bash(...)` grants — and
+// `ClaudeRunner` needs exactly the same behaviour to enforce the same grants
+// through its `canUseTool` callback (CYR-20). It now lives in `cyrus-core` so
+// both runners share one implementation; a command refused on Grok is refused
+// on Claude. Re-exported here so this module's surface is unchanged.
 export { splitShellCommands };
 
+/**
+ * Tool names Grok's rule parser recognizes. Anything else is dropped by Grok
+ * with a warning, so we surface it instead of pretending it applied.
+ */
 const RECOGNIZED_TOOL_NAMES = new Set([
 	"Bash",
 	"Read",
@@ -462,6 +472,11 @@ export function evaluatePermissionRequest(
 		}
 	}
 
+	// The mutating check runs first, and the *first* mutating hint decides. That
+	// was already true — every branch below returned — but the `for` shape read
+	// as though it checked all of them, so a future edit that dropped a `return`
+	// would change behaviour silently. Stating it as a `find` makes the rule
+	// visible: order of `raw` in `describePermissionRequest` decides.
 	const mutatingHint = hints.find((hint) => MUTATING_TOOL_HINTS.has(hint));
 
 	if (mutatingHint) {
