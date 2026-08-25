@@ -16,6 +16,7 @@ export {
 } from "./toolPolicy.js";
 export {
 	GROK_DEFAULT_MODEL_SENTINEL,
+	GROK_DEFAULT_TURN_IDLE_TIMEOUT_MS,
 	type GrokRunnerConfig,
 	type GrokRunnerEvents,
 	type GrokSessionInfo,
