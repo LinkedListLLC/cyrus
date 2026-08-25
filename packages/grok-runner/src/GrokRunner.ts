@@ -25,18 +25,28 @@ import type {
 	AcpSessionUpdateParams,
 	JsonRpcNotification,
 } from "./backend/acpTypes.js";
-import { translateMcpConfigToAcp } from "./backend/mcpTranslator.js";
+import {
+	ensureGrokFolderTrust,
+	resolveGrokHome,
+} from "./backend/folderTrust.js";
+import {
+	buildMcpExpandEnv,
+	translateMcpConfigToAcp,
+} from "./backend/mcpTranslator.js";
 import { GrokMessageFormatter } from "./formatter.js";
 import { GrokEventMapper } from "./GrokEventMapper.js";
+import { GrokSkillStager } from "./GrokSkillStager.js";
 import { hasGrokCachedAuth, resolveGrokBinary } from "./grokBinary.js";
 import {
 	buildRejectionOutcome,
 	describePermissionRequest,
 	evaluatePermissionRequest,
+	type GrokToolPolicy,
 	translateToolRules,
 } from "./toolPolicy.js";
 import {
 	GROK_DEFAULT_MODEL_SENTINEL,
+	GROK_DEFAULT_TURN_IDLE_TIMEOUT_MS,
 	type GrokRunnerConfig,
 	type GrokRunnerEvents,
 	type GrokSessionInfo,
@@ -79,6 +89,7 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 	private readonly config: GrokRunnerConfig;
 	private readonly formatter: IMessageFormatter;
 	private readonly logger: ILogger;
+	private readonly skillStager: GrokSkillStager;
 	private sessionInfo: GrokSessionInfo | null = null;
 	private client: AcpClient | null = null;
 	private mapper: GrokEventMapper | null = null;
@@ -96,12 +107,23 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 	private deniedThisTurn: string[] = [];
 	/** Every policy refusal in this session, surfaced on the result message. */
 	private deniedThisSession: Array<{ tool: string; reason: string }> = [];
+	private sessionToolPolicy: GrokToolPolicy | null = null;
+	/** From ACP available_commands_update._meta.tools (live agent inventory). */
+	private advertisedTools: string[] = [];
+	/** From ACP available_commands_update.availableCommands[].name. */
+	private advertisedSlashCommands: string[] = [];
 
 	constructor(config: GrokRunnerConfig) {
 		super();
 		this.config = config;
 		this.formatter = new GrokMessageFormatter();
 		this.logger = config.logger ?? createLogger({ component: "GrokRunner" });
+		this.skillStager = new GrokSkillStager({
+			workingDirectory: config.workingDirectory,
+			additionalDirectories: config.additionalDirectories,
+			skills: config.skills,
+			plugins: config.plugins,
+		});
 
 		if (config.onMessage) this.on("message", config.onMessage);
 		if (config.onError) this.on("error", config.onError);
@@ -128,12 +150,52 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			mkdirSync(workspace, { recursive: true });
 		}
 
+		this.skillStager.stage();
+		const staged = this.skillStager.getStagedSkillNames();
+		if (staged.length > 0) {
+			this.logger.info(`Staged managed skills for Grok: ${staged.join(", ")}`);
+		}
+
+		// Grok drops project-scoped MCP names (from worktree `.mcp.json`) when the
+		// workspace is untrusted. Headless ACP has no interactive trust prompt, so
+		// grant trust for this session workspace (+ git main workdir for worktrees)
+		// before spawning `grok agent`. Only touches ~/.grok/trusted_folders.toml.
+		try {
+			const trust = ensureGrokFolderTrust(workspace, {
+				grokHome: this.config.grokHome || process.env.GROK_HOME || undefined,
+			});
+			if (trust.writtenPaths.length > 0) {
+				this.logger.info(
+					`Granted Grok folder trust for: ${trust.writtenPaths.join(", ")}`,
+				);
+			} else {
+				this.logger.debug(
+					`Grok folder trust already set for: ${trust.trustedPaths.join(", ") || workspace}`,
+				);
+			}
+		} catch (trustError) {
+			this.logger.warn(
+				`Could not ensure Grok folder trust for ${workspace}: ${
+					trustError instanceof Error ? trustError.message : String(trustError)
+				}`,
+			);
+		}
+
 		this.setupLogging(workspace);
+
+		const toolPolicy = translateToolRules(
+			this.config.allowedTools,
+			this.config.disallowedTools,
+		);
+		this.sessionToolPolicy = toolPolicy;
 
 		this.mapper = new GrokEventMapper({
 			workingDirectory: workspace,
 			model: this.resolvedModelId(),
 			getSessionId: () => this.sessionInfo?.sessionId || "pending",
+			getStagedSkillNames: () => this.skillStager.getStagedSkillNames(),
+			getAvailableTools: () => this.advertisedTools,
+			getSlashCommands: () => this.advertisedSlashCommands,
 			emitMessage: (message) => {
 				this.messages.push(message);
 				this.writeSdkMessageLog(message);
@@ -167,10 +229,20 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			await this.runSession(prompt, workspace);
 		} catch (error) {
 			caughtError = error;
-			this.logger.error(
-				"Grok session failed:",
-				error instanceof Error ? error.message : String(error),
-			);
+			// stop() kills the ACP child; in-flight session/prompt rejects with
+			// "ACP client closed". That is expected teardown, not a session failure
+			// (same class as Claude AbortError / Codex wasStopped).
+			if (this.wasStopped) {
+				this.logger.info(
+					"Grok session stopped:",
+					error instanceof Error ? error.message : String(error),
+				);
+			} else {
+				this.logger.error(
+					"Grok session failed:",
+					error instanceof Error ? error.message : String(error),
+				);
+			}
 		} finally {
 			this.finalize(caughtError);
 		}
@@ -222,15 +294,31 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		return model;
 	}
 
-	private buildAgentArgs(): string[] {
+	/**
+	 * Resolve idle silence budget for `session/prompt`.
+	 * Priority: config → GROK_TURN_IDLE_TIMEOUT_MS → default 15 min.
+	 */
+	private resolveTurnIdleTimeoutMs(): number {
+		if (typeof this.config.turnIdleTimeoutMs === "number") {
+			return Math.max(0, this.config.turnIdleTimeoutMs);
+		}
+		const fromEnv = process.env.GROK_TURN_IDLE_TIMEOUT_MS;
+		if (fromEnv !== undefined && fromEnv !== "") {
+			const parsed = Number(fromEnv);
+			if (Number.isFinite(parsed) && parsed >= 0) {
+				return parsed;
+			}
+		}
+		return GROK_DEFAULT_TURN_IDLE_TIMEOUT_MS;
+	}
+
+	private buildAgentArgs(
+		policy: ReturnType<typeof translateToolRules>,
+	): string[] {
 		// Permission rules are *global* flags: they must precede the `agent`
 		// subcommand (verified against grok 0.2.111 — an invalid value there is
 		// rejected by the parser, so they are genuinely read in this position).
 		const args: string[] = [];
-		const policy = translateToolRules(
-			this.config.allowedTools,
-			this.config.disallowedTools,
-		);
 		for (const rule of policy.allow) {
 			args.push("--allow", rule);
 		}
@@ -302,42 +390,38 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		return args;
 	}
 
-	/**
-	 * Child env for the Grok process.
-	 * Same pattern as Gemini/Codex: inherit process.env (keys stay available).
-	 * Auth method is chosen explicitly via ACP `authenticate` — we prefer
-	 * `cached_token` when auth.json exists; leaving XAI_API_KEY in the env is
-	 * required so an authenticate fallback to `xai.api_key` can actually work
-	 * on the already-spawned child (other runners do not strip API keys either).
-	 */
-	private buildChildEnv(): NodeJS.ProcessEnv {
-		const env: NodeJS.ProcessEnv = {
-			...process.env,
+	private buildChildEnv(
+		expandEnv: Record<string, string | undefined>,
+	): NodeJS.ProcessEnv {
+		return {
+			...expandEnv,
 			GROK_DISABLE_AUTOUPDATER: "1",
+			GROK_HOME: resolveGrokHome(this.config.grokHome),
 		};
-		const grokHome =
-			this.config.grokHome || process.env.GROK_HOME || join(homedir(), ".grok");
-		env.GROK_HOME = grokHome;
-		return env;
 	}
 
 	private async runSession(prompt: string, workspace: string): Promise<void> {
 		const binary = resolveGrokBinary(this.config.grokPath);
-		const args = this.buildAgentArgs();
-		const env = this.buildChildEnv();
-		const policy = translateToolRules(
-			this.config.allowedTools,
-			this.config.disallowedTools,
-		);
+		const policy =
+			this.sessionToolPolicy ??
+			translateToolRules(this.config.allowedTools, this.config.disallowedTools);
+		const expandEnv = buildMcpExpandEnv(workspace);
+		const args = this.buildAgentArgs(policy);
+		const env = this.buildChildEnv(expandEnv);
 
 		this.logger.debug(`Spawning ACP: ${binary} ${args.join(" ")}`);
 
+		// Control-plane RPCs (initialize / auth / session load) use a wall-clock
+		// bound so a wedged child cannot hang setup forever. Match Codex app-server
+		// default (60s). The agent *turn* uses an idle watchdog instead (see
+		// session/prompt below): activity resets the timer; long productive work
+		// is allowed.
 		const client = new AcpClient({
 			command: binary,
 			args,
 			cwd: workspace,
 			env,
-			requestTimeoutMs: 30 * 60 * 1000,
+			requestTimeoutMs: 60_000,
 			// Enforce the tool policy where ACP actually puts the decision: here.
 			// Returning undefined falls through to the default auto-approve, which
 			// is what an unrestricted session should keep doing.
@@ -438,13 +522,15 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			subscriptionTier: tier ?? null,
 		});
 
+		// Same sources as Claude/Codex: worktree .mcp.json + mcpConfigPath + inline.
 		const mcpServers = translateMcpConfigToAcp({
 			workingDirectory: workspace,
 			mcpConfigPath: this.config.mcpConfigPath,
 			mcpConfig: this.config.mcpConfig,
 			mcpCapabilities: caps.mcpCapabilities,
+			env: expandEnv,
 		});
-		this.logger.debug(
+		this.logger.info(
 			`MCP servers for session: ${mcpServers.map((s) => s.name).join(", ") || "(none)"}`,
 		);
 
@@ -474,7 +560,19 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			return;
 		}
 
-		this.logger.debug(`session/prompt starting (${prompt.length} chars)`);
+		const turnIdleTimeoutMs = this.resolveTurnIdleTimeoutMs();
+		const turnTimeoutOpts = {
+			// No absolute wall-clock on the turn (unlike the previous 1h hard cap).
+			// Idle-only: any ACP notification or reverse RPC resets the watchdog.
+			timeoutMs: 0,
+			idleTimeoutMs: turnIdleTimeoutMs,
+		};
+		this.logger.debug(
+			`session/prompt starting (${prompt.length} chars)` +
+				(turnIdleTimeoutMs > 0
+					? ` idleTimeoutMs=${turnIdleTimeoutMs}`
+					: " idleTimeout=disabled"),
+		);
 		this.deniedThisTurn = [];
 		let promptResult = (await client.request(
 			"session/prompt",
@@ -482,7 +580,7 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 				sessionId,
 				prompt: [{ type: "text", text: prompt }],
 			},
-			60 * 60 * 1000,
+			turnTimeoutOpts,
 		)) as AcpSessionPromptResult;
 
 		if (this.wasStopped) {
@@ -533,7 +631,7 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 						},
 					],
 				},
-				60 * 60 * 1000,
+				turnTimeoutOpts,
 			)) as AcpSessionPromptResult;
 
 			this.logger.info(
@@ -694,12 +792,38 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 		if (!update) return;
 
 		this.writeAcpWireLog(update);
+		this.captureAdvertisedInventory(update);
 
 		if (params?.sessionId && this.sessionInfo && !this.sessionInfo.sessionId) {
 			this.sessionInfo.sessionId = params.sessionId;
 		}
 
 		this.mapper?.handleUpdate(update);
+	}
+
+	/**
+	 * Grok advertises live tools + slash commands on available_commands_update
+	 * (tools under _meta.tools; commands under availableCommands). Same inventory
+	 * headless streaming-json surfaces as available_commands / system init.
+	 */
+	private captureAdvertisedInventory(update: AcpSessionUpdate): void {
+		if (update.sessionUpdate !== "available_commands_update") {
+			return;
+		}
+
+		const tools = update._meta?.tools;
+		if (Array.isArray(tools)) {
+			this.advertisedTools = tools.filter(
+				(t): t is string => typeof t === "string" && t.length > 0,
+			);
+		}
+
+		const commands = update.availableCommands;
+		if (Array.isArray(commands)) {
+			this.advertisedSlashCommands = commands
+				.map((c) => (typeof c?.name === "string" ? c.name : null))
+				.filter((name): name is string => Boolean(name));
+		}
 	}
 
 	/**
@@ -850,6 +974,8 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			this.mapper.finalize({
 				error,
 				wasStopped: this.wasStopped,
+				// Keep audit trail when the session dies mid-turn after a deny.
+				permissionDenials: this.deniedThisSession,
 			});
 		}
 
@@ -867,6 +993,8 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			this.logger.debug(`Session logs closed under ${this.logDir}`);
 		}
 
+		this.skillStager.cleanup();
+
 		if (error && !this.wasStopped) {
 			const err = error instanceof Error ? error : new Error(String(error));
 			this.emit("error", err);
@@ -876,7 +1004,8 @@ export class GrokRunner extends EventEmitter implements IAgentRunner {
 			sessionId: this.sessionInfo?.sessionId ?? null,
 			messageCount: this.messages.length,
 			wasStopped: this.wasStopped,
-			hadError: Boolean(error),
+			// Teardown errors after stop() are not session failures.
+			hadError: Boolean(error) && !this.wasStopped,
 		});
 
 		this.emit("complete", this.messages);

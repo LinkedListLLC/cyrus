@@ -24,7 +24,27 @@ export interface GrokRunnerConfig extends AgentRunnerConfig {
 	 * `grok agent --always-approve`. Required for unattended edge workers.
 	 */
 	alwaysApprove?: boolean;
+	/**
+	 * Fail an in-flight `session/prompt` if Grok produces **no ACP activity**
+	 * for this many milliseconds (default **15 minutes** / `900_000`).
+	 *
+	 * Any agent traffic resets the timer: `session/update` notifications,
+	 * reverse RPCs (`session/request_permission`, …). Productive multi-hour
+	 * turns stay alive; a wedged silent process still fails.
+	 *
+	 * Set to `0` to disable the idle watchdog (turn ends only on ACP result,
+	 * process exit, or explicit stop). Override via env
+	 * `GROK_TURN_IDLE_TIMEOUT_MS` when unset on the config object.
+	 */
+	turnIdleTimeoutMs?: number;
 }
+
+/**
+ * Default idle silence before failing `session/prompt` (15 min).
+ * Wall-clock turn limits are intentionally not used for prompts.
+ * Override via config `turnIdleTimeoutMs` or env `GROK_TURN_IDLE_TIMEOUT_MS`.
+ */
+export const GROK_DEFAULT_TURN_IDLE_TIMEOUT_MS = 900_000;
 
 export interface GrokSessionInfo extends AgentSessionInfo {
 	sessionId: string | null;

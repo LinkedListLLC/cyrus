@@ -12,6 +12,9 @@ export type MapperContext = {
 	workingDirectory?: string;
 	model?: string;
 	getSessionId(): string;
+	getStagedSkillNames(): string[];
+	getAvailableTools(): string[];
+	getSlashCommands(): string[];
 	emitMessage(message: SDKMessage): void;
 	onSessionId(sessionId: string): void;
 };
@@ -362,13 +365,13 @@ export class GrokEventMapper {
 			apiKeySource: "user" as const,
 			claude_code_version: "grok-adapter",
 			cwd: this.ctx.workingDirectory || cwd(),
-			tools: [] as string[],
+			tools: this.ctx.getAvailableTools(),
 			mcp_servers: [] as Array<{ name: string; status: string }>,
 			model: this.model,
 			permissionMode: "default" as const,
-			slash_commands: [] as string[],
+			slash_commands: this.ctx.getSlashCommands(),
 			output_style: "default",
-			skills: [] as string[],
+			skills: this.ctx.getStagedSkillNames(),
 			plugins: [] as Array<{ name: string; path: string }>,
 			uuid: crypto.randomUUID(),
 			session_id: sessionId,
@@ -424,6 +427,11 @@ export class GrokEventMapper {
 
 	/**
 	 * Finalize the turn after session/prompt resolves (or on stop/error).
+	 *
+	 * Intentional stop (`wasStopped`) matches Codex: do not emit a terminal
+	 * result. EdgeWorker often stops a non-streaming runner mid-turn to inject
+	 * a new user prompt; posting `is_error` would show as Linear
+	 * "Error from Cyrus" (e.g. "ACP client closed" from process teardown).
 	 */
 	finalize(options?: {
 		error?: unknown;
@@ -445,20 +453,26 @@ export class GrokEventMapper {
 		const permissionDenials = (options?.permissionDenials ?? []).map(
 			(denial) => ({
 				tool_name: denial.tool,
-				tool_use_id: null,
+				// SDK type wants a string; we rarely have the ACP toolCallId at
+				// permission time, so empty is honest (not a fake id).
+				tool_use_id: "",
 				tool_input: {},
 				reason: denial.reason,
 			}),
 		);
 		const sessionId = this.ctx.getSessionId();
 
-		if (options?.error || options?.wasStopped) {
+		// Intentional stop: flush any buffered assistant text above, then exit
+		// without a result message (CodexEventMapper.finalize wasStopped path).
+		if (options?.wasStopped) {
+			return;
+		}
+
+		if (options?.error) {
 			const message =
 				options.error instanceof Error
 					? options.error.message
-					: options?.wasStopped
-						? "Session stopped"
-						: String(options?.error || "Grok session failed");
+					: String(options.error || "Grok session failed");
 			this.errorMessages.push(message);
 
 			const result = {

@@ -282,6 +282,7 @@ export {
 	grantsUnrestrictedBash,
 	hasBashGrant,
 	scanShellCommand,
+	splitRule,
 	splitShellCommands,
 } from "./shell-command-policy.js";
 // Simple Agent Runner types

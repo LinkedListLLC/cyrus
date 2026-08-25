@@ -43,7 +43,13 @@
  * ("Tool Names", "MCP Rules", "Example Configurations").
  */
 
-import { commandMatchesAllowedBash, splitShellCommands } from "cyrus-core";
+import {
+	commandMatchesAllowedBash,
+	grantsUnrestrictedBash,
+	hasBashGrant,
+	splitRule,
+	splitShellCommands,
+} from "cyrus-core";
 
 // The shell-command matching below used to live here. It is engine-agnostic —
 // string matching over a shell command and a list of `Bash(...)` grants — and
@@ -106,15 +112,6 @@ export interface GrokToolPolicy {
 	 * which is not bound by that ordering.
 	 */
 	scopedBashUnenforceable: boolean;
-}
-
-/** Split `Name(args)` into its head and the parenthesised remainder. */
-function splitRule(rule: string): { head: string; args?: string } {
-	const match = rule.match(/^([A-Za-z*][A-Za-z0-9_]*)(\((.*)\))?$/s);
-	if (!match?.[1]) {
-		return { head: "" };
-	}
-	return { head: match[1], args: match[3] };
 }
 
 /**
@@ -442,12 +439,20 @@ export function evaluatePermissionRequest(
 	params: unknown,
 	policy: Pick<GrokToolPolicy, "deny"> & Partial<Pick<GrokToolPolicy, "allow">>,
 ): { allowed: boolean; reason: string } {
-	if (policy.deny.length === 0) {
-		return { allowed: true, reason: "no restriction in force" };
-	}
-
 	const { hints, mcpServer, command } = describePermissionRequest(params);
 	const allow = policy.allow ?? [];
+
+	// An empty deny list is not always "no restriction". When the allow-list
+	// grants every mutating class *and* a scoped Bash pattern (so translate
+	// omits a blanket Bash deny), deny is [] but shell still must be checked
+	// against the grant. Early-returning here used to allow `sed -i` under a
+	// `Bash(git:*)` allow-list. Use the shared core helpers so this matches
+	// the Claude path.
+	const scopedBashInForce =
+		hasBashGrant(allow) && !grantsUnrestrictedBash(allow);
+	if (policy.deny.length === 0 && !scopedBashInForce) {
+		return { allowed: true, reason: "no restriction in force" };
+	}
 
 	// A deny rule with no argument (`Write`, `Bash`) denies the whole tool
 	// class. A *scoped* rule (`Bash(sed:*)`) denies only the commands it names
@@ -456,15 +461,16 @@ export function evaluatePermissionRequest(
 	// started deriving scoped `Bash(...)` denies, reading their head as a
 	// blanket "Bash" made a readOnly persona refuse its own
 	// `Bash(git -C * pull)` grant, i.e. every shell command it had.
-	const blanketDenied = new Set(
-		policy.deny
-			.filter((rule) => splitRule(rule).args === undefined)
-			.map((rule) => splitRule(rule).head),
-	);
-	const scopedBashDenies = policy.deny.filter((rule) => {
+	const blanketDenied = new Set<string>();
+	const scopedBashDenies: string[] = [];
+	for (const rule of policy.deny) {
 		const { head, args } = splitRule(rule);
-		return head === "Bash" && args !== undefined;
-	});
+		if (args === undefined) {
+			if (head) blanketDenied.add(head);
+		} else if (head === "Bash") {
+			scopedBashDenies.push(rule);
+		}
+	}
 
 	// The mutating check runs first, and the *first* mutating hint decides. That
 	// was already true — every branch below returned — but the `for` shape read
@@ -475,7 +481,9 @@ export function evaluatePermissionRequest(
 
 	if (mutatingHint) {
 		const hint = mutatingHint;
-		for (const ruleName of ruleNamesForHint(hint)) {
+		const ruleNames = ruleNamesForHint(hint);
+		const isBash = ruleNames.includes("Bash");
+		for (const ruleName of ruleNames) {
 			if (blanketDenied.has(ruleName)) {
 				return { allowed: false, reason: `${ruleName} is denied (${hint})` };
 			}
@@ -486,10 +494,7 @@ export function evaluatePermissionRequest(
 		// the `sed` rule while a bare `git pull` still runs. Deny is checked
 		// before the allow-list so it wins, matching the Claude path where the
 		// SDK evaluates deny rules ahead of everything else.
-		if (
-			ruleNamesForHint(hint).includes("Bash") &&
-			scopedBashDenies.length > 0
-		) {
+		if (isBash && scopedBashDenies.length > 0) {
 			if (!command) {
 				return {
 					allowed: false,
@@ -525,7 +530,7 @@ export function evaluatePermissionRequest(
 		// A scoped grant like `Bash(git diff:*)` is meant to permit *only* those
 		// commands, so anything outside the grant is refused — deny rules alone
 		// cannot express that, because deny beats allow in the rule engine.
-		if (ruleNamesForHint(hint).includes("Bash") && allow.length > 0) {
+		if (isBash && allow.length > 0) {
 			if (!command) {
 				return {
 					allowed: false,
