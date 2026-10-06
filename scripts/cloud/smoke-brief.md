@@ -15,7 +15,7 @@ CONTEXT      scripts/cloud/session-start.sh  SessionStart hook; its summary is a
                                              your context, full log /tmp/cloud-session-start.log
              scripts/cloud/smoke.sh          the smoke registry and runner
              scripts/cloud/setup.sh          the environment setup script (pnpm, jq, gh,
-                                             pstack plugin, warm pnpm store)
+                                             pstack plugin, first pnpm install)
              CLAUDE.md, Cloud sessions       environment settings and what runs where
              setup.sh installs pstack, so pstack:poteto-mode should be visible. GitHub
              GraphQL is blocked here, so use `gh api` (REST) for any GitHub read.

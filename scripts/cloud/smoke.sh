@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329  # surface functions are called by name from SURFACES
-# Smoke check for a Claude Code cloud session (also runs locally).
-# Usage: bash scripts/cloud/smoke.sh [--only id,id,...]
-# Runs every surface in SURFACES in order and prints one markdown table.
-# Exits 1 if any surface FAILs. A surface with an unmet precondition is SKIP, not FAIL.
+# shellcheck disable=SC2329
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# id | label | needs | command (the rest of the line, so it may hold pipes; eval'd from the repo root in a subshell)
-# A need is a precondition name (see `need`) or the id of an earlier surface that must PASS.
-# Same commands and order as .github/workflows/ci.yml.
 SURFACES='
 install|Install (frozen lockfile, strict peers)||pnpm install --frozen-lockfile --strict-peer-dependencies
 lint|Biome (biome ci)|deps|pnpm biome ci
@@ -37,8 +30,7 @@ need() {
   esac
 }
 
-# REST only: cloud sessions block GitHub GraphQL (HTTP 403), which `gh pr list` and
-# `gh auth status` use. A cloud clone's origin can be a proxy URL, so name the repo.
+# REST only: cloud sessions block GitHub GraphQL (HTTP 403).
 gh_check() {
   local repo n
   repo="$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')"

@@ -574,7 +574,7 @@ A Claude Code cloud session (claude.ai/code) runs on an Ubuntu VM that clones th
 |---|---|---|
 | Environment setup (cached) | `scripts/cloud/setup.sh` | Installs pnpm, `jq`, `gh` and the pstack plugin. Installs the dependencies once, so the VM cache holds them. |
 | Session start (every start and resume) | `scripts/cloud/session-start.sh` | Runs `pnpm install --frozen-lockfile`. Prints a short summary. Writes the full log to `/tmp/cloud-session-start.log`. |
-| Smoke check (on request) | `scripts/cloud/smoke.sh` | Runs the CI checks in CI order. Prints one table. |
+| Smoke check (on request) | `scripts/cloud/smoke.sh` | Runs the CI checks in CI order, plus typecheck. Prints one table. |
 
 The SessionStart hook in `.claude/settings.json` runs `session-start.sh`. The script does nothing unless `CLAUDE_CODE_REMOTE=true`, so it has no effect on a local session.
 

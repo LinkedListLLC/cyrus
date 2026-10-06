@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329  # step functions are called through `step`
-# SessionStart hook (.claude/settings.json). Installs dependencies in a Claude Code cloud
-# session; a no-op everywhere else. Idempotent: session resume runs it again.
+# shellcheck disable=SC2329
 # Stdout lands in Claude's context, so it prints only the summary. Details go to $LOG.
 [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || exit 0
 
@@ -12,7 +10,6 @@ SUMMARY=""
 
 note() { SUMMARY+="$1"$'\n'; }
 
-# step <name> <cmd...>: run cmd with its output in $LOG and record ok / FAIL.
 step() {
   local name=$1; shift
   echo "== $name ($(date -u +%FT%TZ))" >>"$LOG"
