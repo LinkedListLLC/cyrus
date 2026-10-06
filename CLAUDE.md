@@ -566,6 +566,28 @@ The script will show:
 
 This integration is automatically available in all Cyrus sessions - the EdgeWorker automatically configures the official Linear MCP server for each repository using its Linear token.
 
+## Cloud sessions
+
+A Claude Code cloud session (claude.ai/code) runs on an Ubuntu VM that clones this repo from GitHub. Three scripts prepare and check it.
+
+| Stage | File | What it does |
+|---|---|---|
+| Environment setup (cached) | `scripts/cloud/setup.sh` | Installs pnpm, `jq`, `gh` and the pstack plugin. Installs the dependencies once, so the VM cache holds them. |
+| Session start (every start and resume) | `scripts/cloud/session-start.sh` | Runs `pnpm install --frozen-lockfile`. Prints a short summary. Writes the full log to `/tmp/cloud-session-start.log`. |
+| Smoke check (on request) | `scripts/cloud/smoke.sh` | Runs the CI checks in CI order. Prints one table. |
+
+The SessionStart hook in `.claude/settings.json` runs `session-start.sh`. The script does nothing unless `CLAUDE_CODE_REMOTE=true`, so it has no effect on a local session.
+
+**Set up the environment in claude.ai.** This repo uses the shared environment, which has no secrets. Its setup script ends with `bash scripts/cloud/setup.sh`. For a separate environment, paste the full text of `scripts/cloud/setup.sh` as its setup script. The setup script must end in about 5 minutes, or claude.ai does not keep the cache.
+
+**Network access.** Keep the default allowlist. Add no hosts. The npm registry and `github.com` are on the default list. pnpm gets all packages from the npm registry. `setup.sh` gets `gh` from a `github.com` release. No install step downloads from another host.
+
+**Environment variables.** None. No test reads a `.env` file or a secret.
+
+**What runs.** Run `bash scripts/cloud/smoke.sh`. To run some surfaces only, add `--only <id>,<id>`. The script prints one row for each surface: install, lint, build, typecheck, unit, shell and gh. It also prints the list of checks that cannot run in the cloud, and why. F1 test drives are on that list, because they need an Anthropic credential. `scripts/cloud/smoke-brief.md` is the brief for a cloud smoke run. The run writes its result to `docs/cloud-smoke/<UTC date>.md`.
+
+**GitHub.** The cloud proxy blocks GitHub GraphQL. `gh pr create`, `gh pr view` and `gh pr list` fail. Use `gh api` (REST) or the session's built-in GitHub tools.
+
 ## Publishing
 
 For publishing and release instructions, use the `/release` skill (within Claude Code or Claude Agent SDK) which provides a complete guide for publishing packages to npm in the correct dependency order. Invoke it with:
